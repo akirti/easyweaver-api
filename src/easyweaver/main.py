@@ -13,8 +13,14 @@ logger = structlog.get_logger()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting EasyWeaver", debug=settings.debug)
-    await init_db()
-    await init_redis()
+    try:
+        await init_db()
+    except Exception as e:
+        logger.warning("Database not available at startup", error=str(e))
+    try:
+        await init_redis()
+    except Exception as e:
+        logger.warning("Redis not available at startup", error=str(e))
     yield
     await shutdown_redis()
     await shutdown_db()
