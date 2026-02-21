@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "EW_"}
+    model_config = {"env_prefix": "EW_", "env_file": ".env", "env_file_encoding": "utf-8"}
 
     # App
     app_name: str = "easyweaver"
@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://easyweaver:easyweaver@localhost:5432/easyweaver"
 
     # MongoDB
-    mongo_url: str = "mongodb://easyweaver:easyweaver@localhost:27017"
+    mongo_url: str = "mongodb://easyweaver:easyweaver@localhost:27018"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

@@ -10,7 +10,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 
 PG_DSN = "postgresql://easyweaver:easyweaver@localhost:5432/easyweaver"
-MONGO_URI = "mongodb://easyweaver:easyweaver@localhost:27017"
+MONGO_URI = "mongodb://easyweaver:easyweaver@localhost:27018"
 MONGO_DB = "easyweaver_demo"
 
 NUM_USERS = 1000

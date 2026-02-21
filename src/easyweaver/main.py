@@ -15,8 +15,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting EasyWeaver", debug=settings.debug)
     try:
         await init_db()
+        logger.info("MongoDB connected (easyweaver_meta)")
     except Exception as e:
-        logger.warning("Database not available at startup", error=str(e))
+        logger.warning("MongoDB not available at startup", error=str(e))
     try:
         await init_redis()
     except Exception as e:

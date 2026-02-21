@@ -5,7 +5,7 @@ from typing import Any
 import polars as pl
 
 from easyweaver.connectors.registry import get_connector
-from easyweaver.queries.schemas import QueryRequest, QuerySourceConfig, JoinConfig
+from easyweaver.queries.schemas import QuerySourceConfig, JoinConfig
 from easyweaver.sources.models import DataSource
 from easyweaver.sources.service import get_source_credentials
 

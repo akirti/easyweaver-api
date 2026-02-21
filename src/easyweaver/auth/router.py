@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from easyweaver.auth import service
 from easyweaver.auth.dependencies import get_current_user
@@ -17,12 +17,12 @@ router = APIRouter()
 
 
 @router.post("/register", response_model=UserResponse, status_code=201)
-async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
+async def register(data: RegisterRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
     return await service.register_user(db, data)
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(data: LoginRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
     user = await service.authenticate_user(db, data.email, data.password)
     return TokenResponse(
         access_token=service.create_access_token(str(user.id)),
@@ -31,7 +31,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
+async def refresh(data: RefreshRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
     payload = service.decode_token(data.refresh_token)
     if payload.get("type") != "refresh":
         from easyweaver.core.exceptions import AuthenticationError

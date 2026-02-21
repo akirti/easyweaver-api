@@ -1,26 +1,33 @@
-from typing import AsyncGenerator
-
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from easyweaver.settings import settings
 
-engine = create_async_engine(settings.database_url, echo=settings.debug)
-async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+motor_client: AsyncIOMotorClient | None = None
+_meta_db: AsyncIOMotorDatabase | None = None
 
 redis_client: Redis | None = None
 
 
 async def init_db():
-    """Verify DB connection on startup."""
-    async with engine.connect() as conn:
-        await conn.execute(
-            __import__("sqlalchemy").text("SELECT 1")
-        )
+    """Initialize MongoDB connection and create indexes."""
+    global motor_client, _meta_db
+    motor_client = AsyncIOMotorClient(settings.mongo_url)
+    _meta_db = motor_client.easyweaver_meta
+    # Verify connection
+    await motor_client.admin.command("ping")
+    # Ensure indexes
+    await _meta_db.users.create_index("email", unique=True)
+    await _meta_db.data_sources.create_index("created_at")
+    await _meta_db.query_runs.create_index("created_at")
 
 
 async def shutdown_db():
-    await engine.dispose()
+    global motor_client, _meta_db
+    if motor_client:
+        motor_client.close()
+        motor_client = None
+        _meta_db = None
 
 
 async def init_redis():
@@ -36,9 +43,16 @@ async def shutdown_redis():
         redis_client = None
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with async_session() as session:
-        yield session
+def get_meta_db() -> AsyncIOMotorDatabase:
+    """Get the motor database instance directly (for background tasks)."""
+    assert _meta_db is not None, "MongoDB not initialized"
+    return _meta_db
+
+
+async def get_db() -> AsyncIOMotorDatabase:
+    """FastAPI dependency that provides the motor database."""
+    assert _meta_db is not None, "MongoDB not initialized"
+    return _meta_db
 
 
 async def get_redis() -> Redis:

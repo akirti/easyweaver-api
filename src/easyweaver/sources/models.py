@@ -1,24 +1,39 @@
 import uuid
-from datetime import datetime
-
-from sqlalchemy import String, DateTime, func
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 
-class Base(DeclarativeBase):
-    pass
+@dataclass
+class DataSource:
+    id: uuid.UUID
+    name: str
+    source_type: str
+    encrypted_credentials: str
+    metadata_: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
+    @classmethod
+    def from_doc(cls, doc: dict) -> "DataSource":
+        """Create a DataSource from a MongoDB document."""
+        return cls(
+            id=uuid.UUID(doc["_id"]),
+            name=doc["name"],
+            source_type=doc["source_type"],
+            encrypted_credentials=doc["encrypted_credentials"],
+            metadata_=doc.get("metadata"),
+            created_at=doc.get("created_at", datetime.now(timezone.utc)),
+            updated_at=doc.get("updated_at", datetime.now(timezone.utc)),
+        )
 
-class DataSource(Base):
-    __tablename__ = "data_sources"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    source_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    encrypted_credentials: Mapped[str] = mapped_column(String, nullable=False)
-    metadata_: Mapped[str | None] = mapped_column("metadata", String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    def to_doc(self) -> dict:
+        """Convert to a MongoDB document."""
+        return {
+            "_id": str(self.id),
+            "name": self.name,
+            "source_type": self.source_type,
+            "encrypted_credentials": self.encrypted_credentials,
+            "metadata": self.metadata_,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }

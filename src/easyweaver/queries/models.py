@@ -1,22 +1,39 @@
 import uuid
-from datetime import datetime
-
-from sqlalchemy import String, Integer, DateTime, func
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
-
-from easyweaver.sources.models import Base
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 
-class QueryRun(Base):
-    __tablename__ = "query_runs"
+@dataclass
+class QueryRun:
+    id: uuid.UUID
+    config: str
+    status: str = "pending"
+    row_count: int | None = None
+    error: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    config: Mapped[str] = mapped_column(String, nullable=False)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
-    row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    error: Mapped[str | None] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    @classmethod
+    def from_doc(cls, doc: dict) -> "QueryRun":
+        """Create a QueryRun from a MongoDB document."""
+        return cls(
+            id=uuid.UUID(doc["_id"]),
+            config=doc["config"],
+            status=doc.get("status", "pending"),
+            row_count=doc.get("row_count"),
+            error=doc.get("error"),
+            created_at=doc.get("created_at", datetime.now(timezone.utc)),
+            updated_at=doc.get("updated_at", datetime.now(timezone.utc)),
+        )
+
+    def to_doc(self) -> dict:
+        """Convert to a MongoDB document."""
+        return {
+            "_id": str(self.id),
+            "config": self.config,
+            "status": self.status,
+            "row_count": self.row_count,
+            "error": self.error,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }

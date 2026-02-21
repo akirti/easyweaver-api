@@ -10,7 +10,10 @@ def _get_fernet() -> Fernet:
     if _fernet is None:
         key = settings.fernet_key
         if key == "change-me-generate-with-cryptography-fernet":
-            key = Fernet.generate_key().decode()
+            raise RuntimeError(
+                "EW_FERNET_KEY not set. Generate one with: "
+                "python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+            )
         _fernet = Fernet(key.encode() if isinstance(key, str) else key)
     return _fernet
 

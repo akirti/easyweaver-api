@@ -1,25 +1,22 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from easyweaver.auth.models import User
 from easyweaver.auth.schemas import RegisterRequest
 from easyweaver.core.exceptions import AuthenticationError, ValidationError
 from easyweaver.settings import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
 def create_access_token(user_id: str) -> str:
@@ -47,32 +44,39 @@ def decode_token(token: str) -> dict:
         raise AuthenticationError(f"Invalid token: {e}")
 
 
-async def register_user(db: AsyncSession, data: RegisterRequest) -> User:
-    existing = await db.execute(select(User).where(User.email == data.email))
-    if existing.scalar_one_or_none():
+async def register_user(db: AsyncIOMotorDatabase, data: RegisterRequest) -> User:
+    existing = await db.users.find_one({"email": data.email})
+    if existing:
         raise ValidationError("Email already registered")
 
+    now = datetime.now(timezone.utc)
     user = User(
+        id=uuid.uuid4(),
         email=data.email,
         hashed_password=hash_password(data.password),
         display_name=data.display_name,
+        created_at=now,
+        updated_at=now,
     )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
+    await db.users.insert_one(user.to_doc())
     return user
 
 
-async def authenticate_user(db: AsyncSession, email: str, password: str) -> User:
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
-    if not user or not verify_password(password, user.hashed_password):
+async def authenticate_user(db: AsyncIOMotorDatabase, email: str, password: str) -> User:
+    doc = await db.users.find_one({"email": email})
+    if not doc:
+        raise AuthenticationError("Invalid email or password")
+    user = User.from_doc(doc)
+    if not verify_password(password, user.hashed_password):
         raise AuthenticationError("Invalid email or password")
     if not user.is_active:
         raise AuthenticationError("Account is disabled")
     return user
 
 
-async def get_user_by_id(db: AsyncSession, user_id: uuid.UUID) -> User | None:
-    result = await db.execute(select(User).where(User.id == user_id))
-    return result.scalar_one_or_none()
+async def get_user_by_id(db: AsyncIOMotorDatabase, user_id: uuid.UUID | str) -> User | None:
+    uid = str(user_id)
+    doc = await db.users.find_one({"_id": uid})
+    if not doc:
+        return None
+    return User.from_doc(doc)

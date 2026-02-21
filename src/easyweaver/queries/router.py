@@ -1,10 +1,12 @@
+import asyncio
 import csv
 import io
 import uuid
 
+import structlog
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from easyweaver.dependencies import get_db, get_redis
 from easyweaver.queries import service
@@ -13,21 +15,72 @@ from easyweaver.queries.schemas import (
     QueryRunResponse,
     QueryResultsResponse,
 )
-from easyweaver.tasks.query_tasks import execute_query_task
 
+logger = structlog.get_logger()
 router = APIRouter()
 
 
+async def _execute_inline(run_id: str, request: QueryRequest):
+    """Execute query inline (no Celery) using a background asyncio task."""
+    from easyweaver.dependencies import get_meta_db
+    from easyweaver.queries.executor import (
+        execute_single_source,
+        execute_join,
+        apply_sort,
+    )
+    from easyweaver.sources.service import get_source
+    from easyweaver.results.redis_store import RedisResultStore
+    from easyweaver.settings import settings
+    from redis.asyncio import Redis
+
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    store = RedisResultStore(redis)
+
+    db = get_meta_db()
+    try:
+        await service.update_query_run(db, run_id, status="running")
+
+        if request.type == "single":
+            source = await get_source(db, request.left.source_id)
+            df = await execute_single_source(source, request.left)
+        else:
+            assert request.right is not None and request.join is not None
+            left_source = await get_source(db, request.left.source_id)
+            right_source = await get_source(db, request.right.source_id)
+            df = await execute_join(
+                left_source, right_source, request.left, request.right, request.join
+            )
+
+        # Apply sort
+        if request.sort:
+            df = apply_sort(df, [s.model_dump() for s in request.sort])
+
+        # Enforce row limit
+        if len(df) > settings.max_result_rows:
+            df = df.head(settings.max_result_rows)
+
+        # Store result
+        await store.store_result(run_id, df)
+        await service.update_query_run(db, run_id, status="completed", row_count=len(df))
+        logger.info("query_completed", run_id=run_id, rows=len(df))
+
+    except Exception as e:
+        logger.exception("query_execution_failed", run_id=run_id, error=str(e))
+        await service.update_query_run(db, run_id, status="failed", error=str(e))
+    finally:
+        await redis.aclose()
+
+
 @router.post("/execute", response_model=QueryRunResponse, status_code=202)
-async def execute_query(request: QueryRequest, db: AsyncSession = Depends(get_db)):
+async def execute_query(request: QueryRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
     run = await service.create_query_run(db, request)
-    # Dispatch to Celery
-    execute_query_task.delay(str(run.id), request.model_dump_json())
+    # Execute inline as a background task (no Celery needed for dev)
+    asyncio.create_task(_execute_inline(str(run.id), request))
     return run
 
 
 @router.get("/runs/{run_id}", response_model=QueryRunResponse)
-async def get_query_run(run_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_query_run(run_id: uuid.UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
     return await service.get_query_run(db, run_id)
 
 
@@ -38,7 +91,7 @@ async def get_query_results(
     page_size: int = 50,
     sort_column: str | None = None,
     sort_direction: str | None = None,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     from easyweaver.results.redis_store import RedisResultStore
 
@@ -80,7 +133,7 @@ async def get_query_results(
 
 
 @router.post("/runs/{run_id}/cancel")
-async def cancel_query(run_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def cancel_query(run_id: uuid.UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
     run = await service.update_query_run(db, run_id, status="cancelled")
     return {"status": "cancelled", "id": str(run.id)}
 
@@ -89,7 +142,7 @@ async def cancel_query(run_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 async def export_results(
     run_id: uuid.UUID,
     format: str = "csv",
-    db: AsyncSession = Depends(get_db),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     from easyweaver.results.redis_store import RedisResultStore
 

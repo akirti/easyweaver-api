@@ -1,47 +1,48 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from easyweaver.core.exceptions import NotFoundError
 from easyweaver.queries.models import QueryRun
 from easyweaver.queries.schemas import QueryRequest
 
 
-async def create_query_run(db: AsyncSession, request: QueryRequest) -> QueryRun:
+async def create_query_run(db: AsyncIOMotorDatabase, request: QueryRequest) -> QueryRun:
+    now = datetime.now(timezone.utc)
     run = QueryRun(
+        id=uuid.uuid4(),
         config=request.model_dump_json(),
         status="pending",
+        created_at=now,
+        updated_at=now,
     )
-    db.add(run)
-    await db.commit()
-    await db.refresh(run)
+    await db.query_runs.insert_one(run.to_doc())
     return run
 
 
-async def get_query_run(db: AsyncSession, run_id: uuid.UUID) -> QueryRun:
-    result = await db.execute(select(QueryRun).where(QueryRun.id == run_id))
-    run = result.scalar_one_or_none()
-    if not run:
+async def get_query_run(db: AsyncIOMotorDatabase, run_id: uuid.UUID | str) -> QueryRun:
+    rid = str(run_id)
+    doc = await db.query_runs.find_one({"_id": rid})
+    if not doc:
         raise NotFoundError("QueryRun", run_id)
-    return run
+    return QueryRun.from_doc(doc)
 
 
 async def update_query_run(
-    db: AsyncSession,
-    run_id: uuid.UUID,
+    db: AsyncIOMotorDatabase,
+    run_id: uuid.UUID | str,
     status: str | None = None,
     row_count: int | None = None,
     error: str | None = None,
 ) -> QueryRun:
-    values: dict = {"updated_at": datetime.utcnow()}
+    rid = str(run_id)
+    updates: dict = {"updated_at": datetime.now(timezone.utc)}
     if status:
-        values["status"] = status
+        updates["status"] = status
     if row_count is not None:
-        values["row_count"] = row_count
+        updates["row_count"] = row_count
     if error is not None:
-        values["error"] = error
-    await db.execute(update(QueryRun).where(QueryRun.id == run_id).values(**values))
-    await db.commit()
-    return await get_query_run(db, run_id)
+        updates["error"] = error
+    await db.query_runs.update_one({"_id": rid}, {"$set": updates})
+    return await get_query_run(db, rid)

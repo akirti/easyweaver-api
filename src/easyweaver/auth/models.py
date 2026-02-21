@@ -1,23 +1,42 @@
 import uuid
-from datetime import datetime
-
-from sqlalchemy import String, Boolean, DateTime, func
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
-
-from easyweaver.sources.models import Base
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 
-class User(Base):
-    __tablename__ = "users"
+@dataclass
+class User:
+    id: uuid.UUID
+    email: str
+    hashed_password: str
+    display_name: str
+    role: str = "admin"
+    is_active: bool = True
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(50), nullable=False, default="admin")
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    @classmethod
+    def from_doc(cls, doc: dict) -> "User":
+        """Create a User from a MongoDB document."""
+        return cls(
+            id=uuid.UUID(doc["_id"]),
+            email=doc["email"],
+            hashed_password=doc["hashed_password"],
+            display_name=doc["display_name"],
+            role=doc.get("role", "admin"),
+            is_active=doc.get("is_active", True),
+            created_at=doc.get("created_at", datetime.now(timezone.utc)),
+            updated_at=doc.get("updated_at", datetime.now(timezone.utc)),
+        )
+
+    def to_doc(self) -> dict:
+        """Convert to a MongoDB document."""
+        return {
+            "_id": str(self.id),
+            "email": self.email,
+            "hashed_password": self.hashed_password,
+            "display_name": self.display_name,
+            "role": self.role,
+            "is_active": self.is_active,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
