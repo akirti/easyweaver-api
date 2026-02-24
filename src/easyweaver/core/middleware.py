@@ -1,12 +1,51 @@
+import time
+from collections import defaultdict
+
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from easyweaver.core.exceptions import EasyWeaverError
 from easyweaver.settings import settings
 
 logger = structlog.get_logger()
+
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Simple in-memory rate limiter per client IP."""
+
+    def __init__(self, app, max_requests: int = 120, window_seconds: int = 60):
+        super().__init__(app)
+        self._max_requests = max_requests
+        self._window = window_seconds
+        self._requests: dict[str, list[float]] = defaultdict(list)
+
+    async def dispatch(self, request: Request, call_next):
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.monotonic()
+
+        # Clean old entries
+        window_start = now - self._window
+        self._requests[client_ip] = [
+            t for t in self._requests[client_ip] if t > window_start
+        ]
+
+        if len(self._requests[client_ip]) >= self._max_requests:
+            logger.warning("rate_limit_exceeded", client_ip=client_ip)
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": {
+                        "code": "RATE_LIMIT_EXCEEDED",
+                        "message": "Too many requests. Please try again later.",
+                    }
+                },
+            )
+
+        self._requests[client_ip].append(now)
+        return await call_next(request)
 
 
 def setup_middleware(app: FastAPI):
@@ -17,6 +56,12 @@ def setup_middleware(app: FastAPI):
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    if settings.rate_limit_per_minute > 0:
+        app.add_middleware(
+            RateLimitMiddleware,
+            max_requests=settings.rate_limit_per_minute,
+        )
 
     @app.exception_handler(EasyWeaverError)
     async def easyweaver_error_handler(request: Request, exc: EasyWeaverError):

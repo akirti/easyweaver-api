@@ -238,51 +238,60 @@ async def _execute_process_inline(
     run_id: str, config_id: str, param_values: dict, save_to_gcp: bool
 ):
     """Execute a process in the background."""
-    from easyweaver.dependencies import get_meta_db
+    from easyweaver.dependencies import get_meta_db, get_query_semaphore
     from easyweaver.processes.executor import execute_process
     from easyweaver.processes.schemas import ProcessConfig
     from easyweaver.results.redis_store import RedisResultStore
     from easyweaver.settings import settings
     from redis.asyncio import Redis
 
+    semaphore = get_query_semaphore()
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     store = RedisResultStore(redis)
     db = get_meta_db()
 
     try:
-        await service.update_process_run(db, run_id, status="running")
+        async with semaphore:
+            await service.update_process_run(db, run_id, status="running")
 
-        config = await service.get_configuration(db, config_id)
-        process_config = ProcessConfig.model_validate(config.config)
+            config = await service.get_configuration(db, config_id)
+            process_config = ProcessConfig.model_validate(config.config)
 
-        df = await execute_process(process_config, param_values, db)
+            df = await asyncio.wait_for(
+                execute_process(process_config, param_values, db),
+                timeout=settings.query_timeout_seconds,
+            )
 
-        # Enforce row limit
-        if len(df) > settings.max_result_rows:
-            df = df.head(settings.max_result_rows)
+            # Enforce row limit
+            if len(df) > settings.max_result_rows:
+                df = df.head(settings.max_result_rows)
 
-        # Store in Redis
-        result_run_id = str(uuid.uuid4())
-        await store.store_result(result_run_id, df)
+            # Store in Redis
+            result_run_id = str(uuid.uuid4())
+            await store.store_result(result_run_id, df)
 
-        update_kwargs: dict = {
-            "status": "completed",
-            "row_count": len(df),
-            "result_run_id": result_run_id,
-        }
+            update_kwargs: dict = {
+                "status": "completed",
+                "row_count": len(df),
+                "result_run_id": result_run_id,
+            }
 
-        # Optionally save to GCP
-        if save_to_gcp:
-            try:
-                run = await service.get_process_run(db, run_id)
-                gcp_path = service.save_results_to_gcp(run, df)
-                update_kwargs["result_gcp_path"] = gcp_path
-            except Exception as e:
-                logger.warning("gcs_save_failed", run_id=run_id, error=str(e))
+            # Optionally save to GCP
+            if save_to_gcp:
+                try:
+                    run = await service.get_process_run(db, run_id)
+                    gcp_path = service.save_results_to_gcp(run, df)
+                    update_kwargs["result_gcp_path"] = gcp_path
+                except Exception as e:
+                    logger.warning("gcs_save_failed", run_id=run_id, error=str(e))
 
-        await service.update_process_run(db, run_id, **update_kwargs)
-        logger.info("process_completed", run_id=run_id, rows=len(df))
+            await service.update_process_run(db, run_id, **update_kwargs)
+            logger.info("process_completed", run_id=run_id, rows=len(df))
 
+    except asyncio.TimeoutError:
+        msg = f"Process timed out after {settings.query_timeout_seconds}s"
+        logger.warning("process_timeout", run_id=run_id)
+        await service.update_process_run(db, run_id, status="failed", error=msg)
     except Exception as e:
         logger.exception("process_execution_failed", run_id=run_id, error=str(e))
         await service.update_process_run(db, run_id, status="failed", error=str(e))

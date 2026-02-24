@@ -75,12 +75,14 @@ class PostgresConnector(BaseConnector):
                     "row_estimate": row["row_estimate"] or 0,
                     "columns": [],
                 }
-            tables[tn]["columns"].append({
-                "name": row["column_name"],
-                "type": row["data_type"],
-                "nullable": row["is_nullable"] == "YES",
-                "primary_key": row["is_primary_key"],
-            })
+            tables[tn]["columns"].append(
+                {
+                    "name": row["column_name"],
+                    "type": row["data_type"],
+                    "nullable": row["is_nullable"] == "YES",
+                    "primary_key": row["is_primary_key"],
+                }
+            )
         return list(tables.values())
 
     async def get_table_schema(self, table_name: str) -> dict[str, Any]:

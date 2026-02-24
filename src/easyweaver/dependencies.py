@@ -1,5 +1,7 @@
+import asyncio
+
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from redis.asyncio import Redis
+from redis.asyncio import ConnectionPool, Redis
 
 from easyweaver.settings import settings
 
@@ -7,12 +9,28 @@ motor_client: AsyncIOMotorClient | None = None
 _meta_db: AsyncIOMotorDatabase | None = None
 
 redis_client: Redis | None = None
+_redis_pool: ConnectionPool | None = None
+
+# Semaphore to limit concurrent query executions
+_query_semaphore: asyncio.Semaphore | None = None
+
+
+def get_query_semaphore() -> asyncio.Semaphore:
+    """Get the query concurrency semaphore (lazy init)."""
+    global _query_semaphore
+    if _query_semaphore is None:
+        _query_semaphore = asyncio.Semaphore(settings.max_concurrent_queries)
+    return _query_semaphore
 
 
 async def init_db():
     """Initialize MongoDB connection and create indexes."""
     global motor_client, _meta_db
-    motor_client = AsyncIOMotorClient(settings.mongo_url)
+    motor_client = AsyncIOMotorClient(
+        settings.mongo_url,
+        maxPoolSize=settings.db_pool_max_size,
+        minPoolSize=settings.db_pool_min_size,
+    )
     _meta_db = motor_client.easyweaver_meta
     # Verify connection
     await motor_client.admin.command("ping")
@@ -35,16 +53,24 @@ async def shutdown_db():
 
 
 async def init_redis():
-    global redis_client
-    redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
+    global redis_client, _redis_pool
+    _redis_pool = ConnectionPool.from_url(
+        settings.redis_url,
+        max_connections=settings.redis_max_connections,
+        decode_responses=True,
+    )
+    redis_client = Redis(connection_pool=_redis_pool)
     await redis_client.ping()
 
 
 async def shutdown_redis():
-    global redis_client
+    global redis_client, _redis_pool
     if redis_client:
         await redis_client.aclose()
         redis_client = None
+    if _redis_pool:
+        await _redis_pool.aclose()
+        _redis_pool = None
 
 
 def get_meta_db() -> AsyncIOMotorDatabase:

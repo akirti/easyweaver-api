@@ -1,5 +1,4 @@
 import asyncio
-import json
 
 import structlog
 
@@ -27,12 +26,11 @@ def execute_query_task(self, run_id: str, config_json: str):
 async def _execute(run_id: str, config_json: str):
     from easyweaver.dependencies import async_session
     from easyweaver.queries.schemas import QueryRequest
-    from easyweaver.queries.service import get_query_run, update_query_run
+    from easyweaver.queries.service import update_query_run
     from easyweaver.queries.executor import (
         execute_single_source,
         execute_join,
         apply_sort,
-        paginate_dataframe,
     )
     from easyweaver.sources.service import get_source
     from easyweaver.results.redis_store import RedisResultStore

@@ -26,6 +26,11 @@ structlog = "^24.4.0"
 httpx = "^0.28.0"
 websockets = "^14.1"
 google-cloud-storage = "^2.18.0"
+aiomysql = "^0.3.2"
+ibm-db = "^3.2.8"
+openpyxl = "^3.1.5"
+xlrd = "^2.0.2"
+python-multipart = "^0.0.22"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"

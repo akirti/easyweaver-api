@@ -26,15 +26,67 @@ class MongoCredentials(BaseModel):
     auth_database: str = "admin"
 
 
+class MySQLCredentials(BaseModel):
+    type: Literal["mysql"] = "mysql"
+    host: str
+    port: int = 3306
+    database: str
+    user: str
+    password: str
+
+
+class DB2Credentials(BaseModel):
+    type: Literal["db2"] = "db2"
+    host: str
+    port: int = 50000
+    database: str
+    user: str
+    password: str
+
+
+class FileCredentials(BaseModel):
+    type: Literal["file"] = "file"
+    gcp_path: str
+    file_format: Literal["csv", "json", "xlsx", "xls"]
+    original_filename: str
+
+
+class RestAPICredentials(BaseModel):
+    type: Literal["rest_api"] = "rest_api"
+    base_url: str
+    auth_type: Literal[
+        "none", "bearer", "basic", "api_key", "oauth2_client_credentials", "login"
+    ] = "none"
+    bearer_token: str = ""
+    basic_user: str = ""
+    basic_password: str = ""
+    api_key_header: str = "X-API-Key"
+    api_key_value: str = ""
+    oauth2_token_url: str = ""
+    oauth2_client_id: str = ""
+    oauth2_client_secret: str = ""
+    oauth2_scope: str = ""
+    login_url: str = ""
+    login_body: dict = Field(default_factory=dict)
+    login_token_path: str = "access_token"
+    headers: dict[str, str] = Field(default_factory=dict)
+    endpoints: dict[str, dict] = Field(default_factory=dict)
+
+
 SourceCredentials = Annotated[
-    PostgresCredentials | MongoCredentials,
+    PostgresCredentials
+    | MongoCredentials
+    | MySQLCredentials
+    | DB2Credentials
+    | FileCredentials
+    | RestAPICredentials,
     Field(discriminator="type"),
 ]
 
 
 class SourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
-    source_type: Literal["postgres", "mongodb"]
+    source_type: Literal["postgres", "mongodb", "mysql", "db2", "file", "rest_api"]
     credentials: SourceCredentials
 
 

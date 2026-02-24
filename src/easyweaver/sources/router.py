@@ -1,12 +1,13 @@
 import json
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from easyweaver.dependencies import get_db, get_redis
 from easyweaver.sources import service
 from easyweaver.sources.schemas import (
+    FileCredentials,
     SourceCreate,
     SourceUpdate,
     SourceResponse,
@@ -95,3 +96,50 @@ async def preview_table(
     connector = get_connector(source.source_type, creds)
     async with connector:
         return await connector.preview_table(table_name)
+
+
+_ALLOWED_FILE_EXTENSIONS = {".csv", ".json", ".xlsx", ".xls"}
+_EXTENSION_TO_FORMAT = {".csv": "csv", ".json": "json", ".xlsx": "xlsx", ".xls": "xls"}
+
+
+@router.post("/upload", response_model=SourceResponse, status_code=201)
+async def upload_file_source(
+    name: str = Form(...),
+    file: UploadFile = File(...),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    filename = file.filename or "data.csv"
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in _ALLOWED_FILE_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(_ALLOWED_FILE_EXTENSIONS))}",
+        )
+
+    file_format = _EXTENSION_TO_FORMAT[ext]
+    source_id = uuid.uuid4()
+    gcp_path = f"file_uploads/{source_id}/{filename}"
+
+    import asyncio
+
+    from easyweaver.storage.gcs_client import get_gcs_client
+
+    content = await file.read()
+    client = get_gcs_client()
+    await asyncio.to_thread(
+        lambda: client._bucket.blob(gcp_path).upload_from_string(
+            content, content_type=file.content_type or "application/octet-stream"
+        )
+    )
+
+    file_creds = FileCredentials(
+        gcp_path=gcp_path,
+        file_format=file_format,
+        original_filename=filename,
+    )
+    data = SourceCreate(
+        name=name,
+        source_type="file",
+        credentials=file_creds,
+    )
+    return await service.create_source(db, data)

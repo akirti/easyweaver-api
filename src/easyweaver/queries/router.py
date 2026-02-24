@@ -23,7 +23,7 @@ router = APIRouter()
 
 async def _execute_inline(run_id: str, request: QueryRequest):
     """Execute query inline (no Celery) using a background asyncio task."""
-    from easyweaver.dependencies import get_meta_db
+    from easyweaver.dependencies import get_meta_db, get_query_semaphore
     from easyweaver.queries.executor import (
         execute_single_source,
         execute_join,
@@ -35,57 +35,68 @@ async def _execute_inline(run_id: str, request: QueryRequest):
     from easyweaver.settings import settings
     from redis.asyncio import Redis
 
+    semaphore = get_query_semaphore()
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     store = RedisResultStore(redis)
 
     db = get_meta_db()
     try:
-        await service.update_query_run(db, run_id, status="running")
+        async with semaphore:
+            await service.update_query_run(db, run_id, status="running")
 
-        # Resolve cross-dataset filter references (value_from → concrete values)
-        from easyweaver.queries.schemas import FilterCondition as FC
+            async def _run_query():
+                # Resolve cross-dataset filter references
+                from easyweaver.queries.schemas import FilterCondition as FC
 
-        left_config = request.left
-        if any(f.value_from for f in left_config.filters):
-            resolved = await resolve_cross_dataset_filters(
-                store, [f.model_dump() for f in left_config.filters]
+                left_config = request.left
+                if any(f.value_from for f in left_config.filters):
+                    resolved = await resolve_cross_dataset_filters(
+                        store, [f.model_dump() for f in left_config.filters]
+                    )
+                    left_config = left_config.model_copy(
+                        update={"filters": [FC(**fd) for fd in resolved]}
+                    )
+
+                if request.type == "single":
+                    source = await get_source(db, left_config.source_id)
+                    return await execute_single_source(source, left_config)
+                else:
+                    assert request.right is not None and request.join is not None
+                    right_config = request.right
+                    if any(f.value_from for f in right_config.filters):
+                        resolved_right = await resolve_cross_dataset_filters(
+                            store, [f.model_dump() for f in right_config.filters]
+                        )
+                        right_config = right_config.model_copy(
+                            update={"filters": [FC(**fd) for fd in resolved_right]}
+                        )
+                    left_source = await get_source(db, left_config.source_id)
+                    right_source = await get_source(db, right_config.source_id)
+                    return await execute_join(
+                        left_source, right_source, left_config, right_config, request.join
+                    )
+
+            df = await asyncio.wait_for(
+                _run_query(), timeout=settings.query_timeout_seconds
             )
-            left_config = left_config.model_copy(
-                update={"filters": [FC(**fd) for fd in resolved]}
-            )
 
-        if request.type == "single":
-            source = await get_source(db, left_config.source_id)
-            df = await execute_single_source(source, left_config)
-        else:
-            assert request.right is not None and request.join is not None
-            right_config = request.right
-            if any(f.value_from for f in right_config.filters):
-                resolved_right = await resolve_cross_dataset_filters(
-                    store, [f.model_dump() for f in right_config.filters]
-                )
-                right_config = right_config.model_copy(
-                    update={"filters": [FC(**fd) for fd in resolved_right]}
-                )
-            left_source = await get_source(db, left_config.source_id)
-            right_source = await get_source(db, right_config.source_id)
-            df = await execute_join(
-                left_source, right_source, left_config, right_config, request.join
-            )
+            # Apply sort
+            if request.sort:
+                df = apply_sort(df, [s.model_dump() for s in request.sort])
 
-        # Apply sort
-        if request.sort:
-            df = apply_sort(df, [s.model_dump() for s in request.sort])
+            # Enforce row limit
+            if len(df) > settings.max_result_rows:
+                df = df.head(settings.max_result_rows)
 
-        # Enforce row limit
-        if len(df) > settings.max_result_rows:
-            df = df.head(settings.max_result_rows)
+            # Store result
+            await store.store_result(run_id, df)
+            await service.update_query_run(db, run_id, status="completed", row_count=len(df))
+            logger.info("query_completed", run_id=run_id, rows=len(df))
 
-        # Store result
-        await store.store_result(run_id, df)
-        await service.update_query_run(db, run_id, status="completed", row_count=len(df))
-        logger.info("query_completed", run_id=run_id, rows=len(df))
-
+    except asyncio.TimeoutError:
+        msg = f"Query timed out after {settings.query_timeout_seconds}s"
+        logger.warning("query_timeout", run_id=run_id)
+        await service.update_query_run(db, run_id, status="failed", error=msg)
     except Exception as e:
         logger.exception("query_execution_failed", run_id=run_id, error=str(e))
         await service.update_query_run(db, run_id, status="failed", error=str(e))
@@ -167,6 +178,7 @@ async def export_results(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     from easyweaver.results.redis_store import RedisResultStore
+    from easyweaver.settings import settings
 
     redis = await get_redis()
     store = RedisResultStore(redis)
@@ -177,6 +189,10 @@ async def export_results(
         from easyweaver.core.exceptions import NotFoundError
 
         raise NotFoundError("QueryResult", run_id)
+
+    # Enforce export row limit
+    if len(df) > settings.max_export_rows:
+        df = df.head(settings.max_export_rows)
 
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=df.columns)
@@ -192,7 +208,7 @@ async def export_results(
 
 async def _execute_join_results_inline(run_id: str, request: JoinResultsRequest):
     """Join two existing result sets as a background task."""
-    from easyweaver.dependencies import get_meta_db
+    from easyweaver.dependencies import get_meta_db, get_query_semaphore
     from easyweaver.queries.executor import execute_join_from_results, apply_sort
     from easyweaver.queries.operations.filter import apply_filters
     from easyweaver.queries.operations.transform import apply_transforms
@@ -200,33 +216,48 @@ async def _execute_join_results_inline(run_id: str, request: JoinResultsRequest)
     from easyweaver.settings import settings
     from redis.asyncio import Redis
 
+    semaphore = get_query_semaphore()
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     store = RedisResultStore(redis)
     db = get_meta_db()
 
     try:
-        await service.update_query_run(db, run_id, status="running")
+        async with semaphore:
+            await service.update_query_run(db, run_id, status="running")
 
-        df = await execute_join_from_results(
-            store, str(request.left_run_id), str(request.right_run_id), request.join
-        )
+            async def _run_join():
+                df = await execute_join_from_results(
+                    store, str(request.left_run_id), str(request.right_run_id), request.join
+                )
 
-        if request.filters:
-            df = apply_filters(df, [f.model_dump() for f in request.filters], request.filter_logic)
+                if request.filters:
+                    df = apply_filters(
+                        df, [f.model_dump() for f in request.filters], request.filter_logic
+                    )
 
-        if request.sort:
-            df = apply_sort(df, [s.model_dump() for s in request.sort])
+                if request.sort:
+                    df = apply_sort(df, [s.model_dump() for s in request.sort])
 
-        if request.transforms:
-            df = apply_transforms(df, [t.model_dump() for t in request.transforms])
+                if request.transforms:
+                    df = apply_transforms(df, [t.model_dump() for t in request.transforms])
 
-        if len(df) > settings.max_result_rows:
-            df = df.head(settings.max_result_rows)
+                return df
 
-        await store.store_result(run_id, df)
-        await service.update_query_run(db, run_id, status="completed", row_count=len(df))
-        logger.info("join_results_completed", run_id=run_id, rows=len(df))
+            df = await asyncio.wait_for(
+                _run_join(), timeout=settings.query_timeout_seconds
+            )
 
+            if len(df) > settings.max_result_rows:
+                df = df.head(settings.max_result_rows)
+
+            await store.store_result(run_id, df)
+            await service.update_query_run(db, run_id, status="completed", row_count=len(df))
+            logger.info("join_results_completed", run_id=run_id, rows=len(df))
+
+    except asyncio.TimeoutError:
+        msg = f"Join timed out after {settings.query_timeout_seconds}s"
+        logger.warning("join_timeout", run_id=run_id)
+        await service.update_query_run(db, run_id, status="failed", error=msg)
     except Exception as e:
         logger.exception("join_results_failed", run_id=run_id, error=str(e))
         await service.update_query_run(db, run_id, status="failed", error=str(e))

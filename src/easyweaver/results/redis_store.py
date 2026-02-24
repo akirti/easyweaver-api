@@ -17,7 +17,7 @@ class RedisResultStore(ResultStore):
     async def store_result(self, run_id: str, df: pl.DataFrame, ttl: int | None = None) -> None:
         ttl = ttl or settings.result_ttl_seconds
         buf = io.BytesIO()
-        df.write_parquet(buf)
+        df.write_parquet(buf, compression="zstd", compression_level=3)
         # Use a separate non-decoded connection for binary data
         raw_redis = Redis.from_url(settings.redis_url, decode_responses=False)
         try:

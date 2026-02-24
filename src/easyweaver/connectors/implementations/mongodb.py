@@ -76,11 +76,13 @@ class MongoDBConnector(BaseConnector):
             # Sample documents to infer schema
             sample = await coll.aggregate([{"$sample": {"size": 100}}]).to_list(100)
             columns = self._infer_columns(sample)
-            result.append({
-                "name": coll_name,
-                "row_estimate": count,
-                "columns": columns,
-            })
+            result.append(
+                {
+                    "name": coll_name,
+                    "row_estimate": count,
+                    "columns": columns,
+                }
+            )
         return result
 
     async def get_table_schema(self, table_name: str) -> dict[str, Any]:
@@ -175,7 +177,12 @@ class MongoDBConnector(BaseConnector):
                 full_key = f"{prefix}{key}" if prefix else key
                 if isinstance(value, dict) and depth < max_depth:
                     _collect(value, f"{full_key}.", depth + 1)
-                elif isinstance(value, list) and value and isinstance(value[0], dict) and depth < max_depth:
+                elif (
+                    isinstance(value, list)
+                    and value
+                    and isinstance(value[0], dict)
+                    and depth < max_depth
+                ):
                     _collect(value[0], f"{full_key}[].", depth + 1)
                 else:
                     if full_key not in field_types:
@@ -187,16 +194,29 @@ class MongoDBConnector(BaseConnector):
             _collect(doc)
 
         columns = []
-        type_map = {"str": "string", "int": "integer", "float": "float", "bool": "boolean", "list": "array", "NoneType": "null"}
+        type_map = {
+            "str": "string",
+            "int": "integer",
+            "float": "float",
+            "bool": "boolean",
+            "list": "array",
+            "NoneType": "null",
+        }
         for name, types in sorted(field_types.items()):
             types_no_null = types - {"NoneType"}
-            primary_type = next(iter(types_no_null)) if len(types_no_null) == 1 else ("mixed" if types_no_null else "null")
-            columns.append({
-                "name": name,
-                "type": type_map.get(primary_type, primary_type),
-                "nullable": True,
-                "primary_key": False,
-            })
+            primary_type = (
+                next(iter(types_no_null))
+                if len(types_no_null) == 1
+                else ("mixed" if types_no_null else "null")
+            )
+            columns.append(
+                {
+                    "name": name,
+                    "type": type_map.get(primary_type, primary_type),
+                    "nullable": True,
+                    "primary_key": False,
+                }
+            )
         return columns
 
     @staticmethod
@@ -228,7 +248,9 @@ class MongoDBConnector(BaseConnector):
                     arr_key = f"{key}[].{sub_key}"
                     vals = [elem.get(sub_key) for elem in v if isinstance(elem, dict)]
                     # Collapse to single value if all same, else comma-join
-                    primitives = [MongoDBConnector._make_serializable(x) for x in vals if x is not None]
+                    primitives = [
+                        MongoDBConnector._make_serializable(x) for x in vals if x is not None
+                    ]
                     if len(primitives) == 1:
                         flat[arr_key] = primitives[0]
                     elif primitives:

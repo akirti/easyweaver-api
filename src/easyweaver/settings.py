@@ -32,8 +32,22 @@ class Settings(BaseSettings):
 
     # Query limits
     max_result_rows: int = 100_000
+    max_export_rows: int = 500_000
     result_ttl_seconds: int = 3600
     schema_cache_ttl_seconds: int = 900
+    query_timeout_seconds: int = 300
+
+    # Concurrency
+    max_concurrent_queries: int = 10
+    rate_limit_per_minute: int = 120
+
+    # Connection pooling
+    db_pool_min_size: int = 1
+    db_pool_max_size: int = 10
+    redis_max_connections: int = 20
+
+    # Process run limits
+    max_process_runs_per_config: int = 50
 
     # GCS Storage
     gcs_bucket_name: str = ""
