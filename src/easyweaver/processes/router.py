@@ -156,7 +156,7 @@ async def reload_results_from_gcp(
 # --- Configuration endpoints ---
 
 
-@router.get("/", response_model=list[ProcessConfigurationResponse])
+@router.get("", response_model=list[ProcessConfigurationResponse])
 async def list_configurations(
     user_id: str | None = None,
     db: AsyncIOMotorDatabase = Depends(get_db),
@@ -165,7 +165,7 @@ async def list_configurations(
     return [_config_to_response(c) for c in configs]
 
 
-@router.post("/", response_model=ProcessConfigurationResponse, status_code=201)
+@router.post("", response_model=ProcessConfigurationResponse, status_code=201)
 async def create_configuration(
     data: ProcessConfigurationCreate,
     db: AsyncIOMotorDatabase = Depends(get_db),
