@@ -26,6 +26,8 @@ def setup_middleware(app: FastAPI):
             "AUTHENTICATION_FAILED": 401,
             "CONNECTION_TEST_FAILED": 400,
             "QUERY_EXECUTION_FAILED": 400,
+            "PROCESS_EXECUTION_FAILED": 400,
+            "STORAGE_ERROR": 500,
         }
         status_code = status_map.get(exc.code, 500)
         logger.error("request_error", code=exc.code, message=exc.message)

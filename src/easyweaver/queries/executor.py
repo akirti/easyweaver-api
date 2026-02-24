@@ -102,14 +102,18 @@ async def execute_join(
         left_df, right_df, join_config.left_on, join_config.right_on
     )
 
+    # Normalize to lists for Polars
+    left_on = join_config.left_on if isinstance(join_config.left_on, list) else [join_config.left_on]
+    right_on = join_config.right_on if isinstance(join_config.right_on, list) else [join_config.right_on]
+
     # Map join types
     how_map = {"inner": "inner", "left": "left", "right": "right", "outer": "full"}
     how = how_map.get(join_config.join_type, "inner")
 
     result = left_df.join(
         right_df,
-        left_on=join_config.left_on,
-        right_on=join_config.right_on,
+        left_on=left_on,
+        right_on=right_on,
         how=how,
         suffix="_right",
     )
@@ -140,13 +144,17 @@ async def execute_join_from_results(
         left_df, right_df, join_config.left_on, join_config.right_on
     )
 
+    # Normalize to lists for Polars
+    left_on = join_config.left_on if isinstance(join_config.left_on, list) else [join_config.left_on]
+    right_on = join_config.right_on if isinstance(join_config.right_on, list) else [join_config.right_on]
+
     how_map = {"inner": "inner", "left": "left", "right": "right", "outer": "full"}
     how = how_map.get(join_config.join_type, "inner")
 
     return left_df.join(
         right_df,
-        left_on=join_config.left_on,
-        right_on=join_config.right_on,
+        left_on=left_on,
+        right_on=right_on,
         how=how,
         suffix="_right",
     )
@@ -155,21 +163,20 @@ async def execute_join_from_results(
 def _coerce_join_keys(
     left: pl.DataFrame,
     right: pl.DataFrame,
-    left_on: str,
-    right_on: str,
+    left_on: str | list[str],
+    right_on: str | list[str],
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Coerce join key columns to compatible types (int ↔ string)."""
-    left_type = left.schema.get(left_on)
-    right_type = right.schema.get(right_on)
-
-    if left_type is None or right_type is None:
-        return left, right
-
-    if left_type != right_type:
-        # Cast both to string for safe joining
-        left = left.with_columns(pl.col(left_on).cast(pl.Utf8))
-        right = right.with_columns(pl.col(right_on).cast(pl.Utf8))
-
+    left_cols = [left_on] if isinstance(left_on, str) else left_on
+    right_cols = [right_on] if isinstance(right_on, str) else right_on
+    for lc, rc in zip(left_cols, right_cols):
+        left_type = left.schema.get(lc)
+        right_type = right.schema.get(rc)
+        if left_type is None or right_type is None:
+            continue
+        if left_type != right_type:
+            left = left.with_columns(pl.col(lc).cast(pl.Utf8))
+            right = right.with_columns(pl.col(rc).cast(pl.Utf8))
     return left, right
 
 

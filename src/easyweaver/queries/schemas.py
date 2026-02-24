@@ -67,8 +67,18 @@ class QuerySourceConfig(BaseModel):
 
 class JoinConfig(BaseModel):
     join_type: Literal["inner", "left", "right", "outer"] = "inner"
-    left_on: str
-    right_on: str
+    left_on: str | list[str]
+    right_on: str | list[str]
+
+    @model_validator(mode="after")
+    def check_join_keys(self):
+        left = self.left_on if isinstance(self.left_on, list) else [self.left_on]
+        right = self.right_on if isinstance(self.right_on, list) else [self.right_on]
+        if len(left) != len(right):
+            raise ValueError("left_on and right_on must have the same number of columns")
+        if len(left) == 0:
+            raise ValueError("At least one join key pair is required")
+        return self
 
 
 class QueryRequest(BaseModel):

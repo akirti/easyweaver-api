@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     result_ttl_seconds: int = 3600
     schema_cache_ttl_seconds: int = 900
 
+    # GCS Storage
+    gcs_bucket_name: str = ""
+    gcs_credentials_path: str = ""
+    gcs_credentials_json: str = ""
+    file_storage_type: str = "redis"
+
     # CORS
     cors_origins: list[str] = ["http://localhost:5173"]
 

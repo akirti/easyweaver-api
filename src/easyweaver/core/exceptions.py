@@ -38,3 +38,13 @@ class ValidationError(EasyWeaverError):
 class AuthenticationError(EasyWeaverError):
     def __init__(self, message: str = "Invalid credentials"):
         super().__init__(message=message, code="AUTHENTICATION_FAILED")
+
+
+class ProcessExecutionError(EasyWeaverError):
+    def __init__(self, message: str, details: Any = None):
+        super().__init__(message=message, code="PROCESS_EXECUTION_FAILED", details=details)
+
+
+class StorageError(EasyWeaverError):
+    def __init__(self, message: str, details: Any = None):
+        super().__init__(message=message, code="STORAGE_ERROR", details=details)

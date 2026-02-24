@@ -52,5 +52,9 @@ def _register_routes(app: FastAPI):
     app.include_router(queries_router, prefix="/api/v1/queries", tags=["queries"])
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
 
+    from easyweaver.processes.router import router as processes_router
+
+    app.include_router(processes_router, prefix="/api/v1/processes", tags=["processes"])
+
 
 app = create_app()

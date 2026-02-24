@@ -20,6 +20,10 @@ async def init_db():
     await _meta_db.users.create_index("email", unique=True)
     await _meta_db.data_sources.create_index("created_at")
     await _meta_db.query_runs.create_index("created_at")
+    await _meta_db.process_configurations.create_index("created_at")
+    await _meta_db.process_configurations.create_index("user_id")
+    await _meta_db.process_runs.create_index("created_at")
+    await _meta_db.process_runs.create_index("process_id")
 
 
 async def shutdown_db():
