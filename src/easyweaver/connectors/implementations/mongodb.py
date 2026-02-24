@@ -1,6 +1,8 @@
+import json
 import time
 from typing import Any
 
+from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorClient
 
 from easyweaver.connectors.base import BaseConnector
@@ -102,10 +104,11 @@ class MongoDBConnector(BaseConnector):
         filters: list[dict] | None = None,
         sort: list[dict] | None = None,
         limit: int | None = None,
+        filter_logic: str = "and",
     ) -> list[dict[str, Any]]:
         coll = self._db[table]
-        mongo_filter = self._build_filter(filters) if filters else {}
-        projection = {c: 1 for c in columns} if columns else None
+        mongo_filter = self._build_filter(filters, filter_logic) if filters else {}
+        projection = {c.replace("[].", "."): 1 for c in columns} if columns else None
         cursor = coll.find(mongo_filter, projection)
 
         if sort:
@@ -122,10 +125,10 @@ class MongoDBConnector(BaseConnector):
         return self._serialize_docs(docs)
 
     @staticmethod
-    def _build_filter(filters: list[dict]) -> dict:
+    def _build_filter(filters: list[dict], logic: str = "and") -> dict:
         conditions = []
         for f in filters:
-            col = f["column"]
+            col = f["column"].replace("[].", ".")
             op = f["operator"]
             val = f.get("value")
             if op == "eq":
@@ -143,27 +146,51 @@ class MongoDBConnector(BaseConnector):
             elif op == "like":
                 conditions.append({col: {"$regex": val, "$options": "i"}})
             elif op == "is_null":
-                conditions.append({col: None})
+                conditions.append({"$or": [{col: None}, {col: {"$exists": False}}]})
             elif op == "is_not_null":
-                conditions.append({col: {"$ne": None}})
-        return {"$and": conditions} if conditions else {}
+                conditions.append({col: {"$exists": True, "$ne": None}})
+            elif op == "in":
+                values = val if isinstance(val, list) else []
+                conditions.append({col: {"$in": values}})
+            elif op == "not_in":
+                values = val if isinstance(val, list) else []
+                conditions.append({col: {"$nin": values}})
+            elif op == "between":
+                val2 = f.get("value2")
+                conditions.append({col: {"$gte": val, "$lte": val2}})
+        if not conditions:
+            return {}
+        key = "$or" if logic == "or" else "$and"
+        return {key: conditions}
 
     @staticmethod
-    def _infer_columns(docs: list[dict]) -> list[dict[str, Any]]:
+    def _infer_columns(docs: list[dict], max_depth: int = 3) -> list[dict[str, Any]]:
+        """Infer column names and types, recursing into nested dicts."""
         field_types: dict[str, set[str]] = {}
-        for doc in docs:
-            for key, value in doc.items():
-                if key == "_id":
+
+        def _collect(obj: dict, prefix: str = "", depth: int = 0):
+            for key, value in obj.items():
+                if key == "_id" and not prefix:
                     continue
-                if key not in field_types:
-                    field_types[key] = set()
-                t = type(value).__name__
-                field_types[key].add(t)
+                full_key = f"{prefix}{key}" if prefix else key
+                if isinstance(value, dict) and depth < max_depth:
+                    _collect(value, f"{full_key}.", depth + 1)
+                elif isinstance(value, list) and value and isinstance(value[0], dict) and depth < max_depth:
+                    _collect(value[0], f"{full_key}[].", depth + 1)
+                else:
+                    if full_key not in field_types:
+                        field_types[full_key] = set()
+                    t = type(value).__name__
+                    field_types[full_key].add(t)
+
+        for doc in docs:
+            _collect(doc)
 
         columns = []
+        type_map = {"str": "string", "int": "integer", "float": "float", "bool": "boolean", "list": "array", "NoneType": "null"}
         for name, types in sorted(field_types.items()):
-            primary_type = next(iter(types)) if len(types) == 1 else "mixed"
-            type_map = {"str": "string", "int": "integer", "float": "float", "bool": "boolean"}
+            types_no_null = types - {"NoneType"}
+            primary_type = next(iter(types_no_null)) if len(types_no_null) == 1 else ("mixed" if types_no_null else "null")
             columns.append({
                 "name": name,
                 "type": type_map.get(primary_type, primary_type),
@@ -173,14 +200,45 @@ class MongoDBConnector(BaseConnector):
         return columns
 
     @staticmethod
+    def _make_serializable(v: Any) -> Any:
+        """Convert non-JSON-serializable types to strings."""
+        if isinstance(v, ObjectId):
+            return str(v)
+        if isinstance(v, (dict, list)):
+            return json.dumps(v, default=str)
+        return v
+
+    @staticmethod
+    def _flatten_doc(doc: dict, prefix: str = "", max_depth: int = 3, depth: int = 0) -> dict:
+        """Flatten nested dicts and arrays into dot-path keys matching column names."""
+        flat: dict[str, Any] = {}
+        for k, v in doc.items():
+            key = f"{prefix}{k}" if prefix else k
+            if k == "_id" and not prefix:
+                flat[k] = str(v)
+            elif isinstance(v, dict) and depth < max_depth:
+                flat.update(MongoDBConnector._flatten_doc(v, f"{key}.", max_depth, depth + 1))
+            elif isinstance(v, list) and v and isinstance(v[0], dict) and depth < max_depth:
+                # Array of dicts: extract each sub-field across all elements
+                all_sub_keys: set[str] = set()
+                for elem in v:
+                    if isinstance(elem, dict):
+                        all_sub_keys.update(elem.keys())
+                for sub_key in sorted(all_sub_keys):
+                    arr_key = f"{key}[].{sub_key}"
+                    vals = [elem.get(sub_key) for elem in v if isinstance(elem, dict)]
+                    # Collapse to single value if all same, else comma-join
+                    primitives = [MongoDBConnector._make_serializable(x) for x in vals if x is not None]
+                    if len(primitives) == 1:
+                        flat[arr_key] = primitives[0]
+                    elif primitives:
+                        flat[arr_key] = ", ".join(str(x) for x in primitives)
+                    else:
+                        flat[arr_key] = None
+            else:
+                flat[key] = MongoDBConnector._make_serializable(v)
+        return flat
+
+    @staticmethod
     def _serialize_docs(docs: list[dict]) -> list[dict[str, Any]]:
-        rows = []
-        for doc in docs:
-            row = {}
-            for k, v in doc.items():
-                if k == "_id":
-                    row[k] = str(v)
-                else:
-                    row[k] = v
-            rows.append(row)
-        return rows
+        return [MongoDBConnector._flatten_doc(doc) for doc in docs]

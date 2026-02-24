@@ -40,6 +40,7 @@ class BaseConnector(ABC):
         filters: list[dict] | None = None,
         sort: list[dict] | None = None,
         limit: int | None = None,
+        filter_logic: str = "and",
     ) -> list[dict[str, Any]]:
         """Execute a query and return rows as dicts."""
 

@@ -6,10 +6,15 @@ import asyncpg
 from easyweaver.connectors.base import BaseConnector
 
 
+_PG_INT_TYPES = {"smallint", "integer", "bigint"}
+_PG_FLOAT_TYPES = {"real", "double precision", "numeric", "money"}
+
+
 class PostgresConnector(BaseConnector):
     def __init__(self, credentials: dict[str, Any]):
         super().__init__(credentials)
         self._pool: asyncpg.Pool | None = None
+        self._column_types: dict[str, dict[str, str]] = {}  # table -> {col: type}
 
     def _dsn(self) -> str:
         c = self.credentials
@@ -97,6 +102,48 @@ class PostgresConnector(BaseConnector):
                 "total_sampled": len(rows),
             }
 
+    async def _get_column_types(self, table: str) -> dict[str, str]:
+        """Fetch and cache column name→data_type mapping for a table."""
+        if table in self._column_types:
+            return self._column_types[table]
+        assert self._pool
+        query = """
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = $1
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, table)
+        mapping = {r["column_name"]: r["data_type"] for r in rows}
+        self._column_types[table] = mapping
+        return mapping
+
+    def _coerce_value(self, value: Any, pg_type: str) -> Any:
+        """Coerce a filter value to match the Postgres column type."""
+        if value is None:
+            return None
+        if pg_type in _PG_INT_TYPES:
+            if isinstance(value, int):
+                return value
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                return value
+        if pg_type in _PG_FLOAT_TYPES:
+            if isinstance(value, (int, float)):
+                return float(value)
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return value
+        if pg_type == "boolean":
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.lower() in ("true", "1", "t", "yes")
+            return bool(value)
+        return value
+
     async def execute_query(
         self,
         table: str,
@@ -104,8 +151,11 @@ class PostgresConnector(BaseConnector):
         filters: list[dict] | None = None,
         sort: list[dict] | None = None,
         limit: int | None = None,
+        filter_logic: str = "and",
     ) -> list[dict[str, Any]]:
         assert self._pool
+
+        col_types = await self._get_column_types(table) if filters else {}
 
         col_clause = ", ".join(f'"{c}"' for c in columns) if columns else "*"
         query = f'SELECT {col_clause} FROM "{table}"'
@@ -116,40 +166,68 @@ class PostgresConnector(BaseConnector):
             clauses = []
             for f in filters:
                 op = f["operator"]
+                col_name = f["column"]
+                pg_type = col_types.get(col_name, "text")
                 if op == "eq":
-                    clauses.append(f'"{f["column"]}" = ${idx}')
-                    params.append(f["value"])
+                    clauses.append(f'"{col_name}" = ${idx}')
+                    params.append(self._coerce_value(f["value"], pg_type))
                     idx += 1
                 elif op == "neq":
-                    clauses.append(f'"{f["column"]}" != ${idx}')
-                    params.append(f["value"])
+                    clauses.append(f'"{col_name}" != ${idx}')
+                    params.append(self._coerce_value(f["value"], pg_type))
                     idx += 1
                 elif op == "gt":
-                    clauses.append(f'"{f["column"]}" > ${idx}')
-                    params.append(f["value"])
+                    clauses.append(f'"{col_name}" > ${idx}')
+                    params.append(self._coerce_value(f["value"], pg_type))
                     idx += 1
                 elif op == "lt":
-                    clauses.append(f'"{f["column"]}" < ${idx}')
-                    params.append(f["value"])
+                    clauses.append(f'"{col_name}" < ${idx}')
+                    params.append(self._coerce_value(f["value"], pg_type))
                     idx += 1
                 elif op == "gte":
-                    clauses.append(f'"{f["column"]}" >= ${idx}')
-                    params.append(f["value"])
+                    clauses.append(f'"{col_name}" >= ${idx}')
+                    params.append(self._coerce_value(f["value"], pg_type))
                     idx += 1
                 elif op == "lte":
-                    clauses.append(f'"{f["column"]}" <= ${idx}')
-                    params.append(f["value"])
+                    clauses.append(f'"{col_name}" <= ${idx}')
+                    params.append(self._coerce_value(f["value"], pg_type))
                     idx += 1
                 elif op == "like":
-                    clauses.append(f'"{f["column"]}" LIKE ${idx}')
-                    params.append(f["value"])
+                    clauses.append(f'"{col_name}" ILIKE ${idx}')
+                    params.append(f"%{f['value']}%")
                     idx += 1
                 elif op == "is_null":
-                    clauses.append(f'"{f["column"]}" IS NULL')
+                    clauses.append(f'"{col_name}" IS NULL')
                 elif op == "is_not_null":
-                    clauses.append(f'"{f["column"]}" IS NOT NULL')
+                    clauses.append(f'"{col_name}" IS NOT NULL')
+                elif op == "in":
+                    values = f.get("value", [])
+                    if not values:
+                        clauses.append("FALSE")
+                    else:
+                        coerced = [self._coerce_value(v, pg_type) for v in values]
+                        placeholders = ", ".join(f"${idx + i}" for i in range(len(coerced)))
+                        clauses.append(f'"{col_name}" IN ({placeholders})')
+                        params.extend(coerced)
+                        idx += len(coerced)
+                elif op == "not_in":
+                    values = f.get("value", [])
+                    if not values:
+                        clauses.append("TRUE")
+                    else:
+                        coerced = [self._coerce_value(v, pg_type) for v in values]
+                        placeholders = ", ".join(f"${idx + i}" for i in range(len(coerced)))
+                        clauses.append(f'"{col_name}" NOT IN ({placeholders})')
+                        params.extend(coerced)
+                        idx += len(coerced)
+                elif op == "between":
+                    clauses.append(f'"{col_name}" BETWEEN ${idx} AND ${idx + 1}')
+                    params.append(self._coerce_value(f["value"], pg_type))
+                    params.append(self._coerce_value(f["value2"], pg_type))
+                    idx += 2
             if clauses:
-                query += " WHERE " + " AND ".join(clauses)
+                joiner = " OR " if filter_logic == "or" else " AND "
+                query += " WHERE " + joiner.join(clauses)
 
         if sort:
             order_parts = []

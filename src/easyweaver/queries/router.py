@@ -12,6 +12,7 @@ from easyweaver.dependencies import get_db, get_redis
 from easyweaver.queries import service
 from easyweaver.queries.schemas import (
     QueryRequest,
+    JoinResultsRequest,
     QueryRunResponse,
     QueryResultsResponse,
 )
@@ -27,6 +28,7 @@ async def _execute_inline(run_id: str, request: QueryRequest):
         execute_single_source,
         execute_join,
         apply_sort,
+        resolve_cross_dataset_filters,
     )
     from easyweaver.sources.service import get_source
     from easyweaver.results.redis_store import RedisResultStore
@@ -40,15 +42,35 @@ async def _execute_inline(run_id: str, request: QueryRequest):
     try:
         await service.update_query_run(db, run_id, status="running")
 
+        # Resolve cross-dataset filter references (value_from → concrete values)
+        from easyweaver.queries.schemas import FilterCondition as FC
+
+        left_config = request.left
+        if any(f.value_from for f in left_config.filters):
+            resolved = await resolve_cross_dataset_filters(
+                store, [f.model_dump() for f in left_config.filters]
+            )
+            left_config = left_config.model_copy(
+                update={"filters": [FC(**fd) for fd in resolved]}
+            )
+
         if request.type == "single":
-            source = await get_source(db, request.left.source_id)
-            df = await execute_single_source(source, request.left)
+            source = await get_source(db, left_config.source_id)
+            df = await execute_single_source(source, left_config)
         else:
             assert request.right is not None and request.join is not None
-            left_source = await get_source(db, request.left.source_id)
-            right_source = await get_source(db, request.right.source_id)
+            right_config = request.right
+            if any(f.value_from for f in right_config.filters):
+                resolved_right = await resolve_cross_dataset_filters(
+                    store, [f.model_dump() for f in right_config.filters]
+                )
+                right_config = right_config.model_copy(
+                    update={"filters": [FC(**fd) for fd in resolved_right]}
+                )
+            left_source = await get_source(db, left_config.source_id)
+            right_source = await get_source(db, right_config.source_id)
             df = await execute_join(
-                left_source, right_source, request.left, request.right, request.join
+                left_source, right_source, left_config, right_config, request.join
             )
 
         # Apply sort
@@ -166,6 +188,83 @@ async def export_results(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=query_{run_id}.csv"},
     )
+
+
+async def _execute_join_results_inline(run_id: str, request: JoinResultsRequest):
+    """Join two existing result sets as a background task."""
+    from easyweaver.dependencies import get_meta_db
+    from easyweaver.queries.executor import execute_join_from_results, apply_sort
+    from easyweaver.queries.operations.filter import apply_filters
+    from easyweaver.queries.operations.transform import apply_transforms
+    from easyweaver.results.redis_store import RedisResultStore
+    from easyweaver.settings import settings
+    from redis.asyncio import Redis
+
+    redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    store = RedisResultStore(redis)
+    db = get_meta_db()
+
+    try:
+        await service.update_query_run(db, run_id, status="running")
+
+        df = await execute_join_from_results(
+            store, str(request.left_run_id), str(request.right_run_id), request.join
+        )
+
+        if request.filters:
+            df = apply_filters(df, [f.model_dump() for f in request.filters], request.filter_logic)
+
+        if request.sort:
+            df = apply_sort(df, [s.model_dump() for s in request.sort])
+
+        if request.transforms:
+            df = apply_transforms(df, [t.model_dump() for t in request.transforms])
+
+        if len(df) > settings.max_result_rows:
+            df = df.head(settings.max_result_rows)
+
+        await store.store_result(run_id, df)
+        await service.update_query_run(db, run_id, status="completed", row_count=len(df))
+        logger.info("join_results_completed", run_id=run_id, rows=len(df))
+
+    except Exception as e:
+        logger.exception("join_results_failed", run_id=run_id, error=str(e))
+        await service.update_query_run(db, run_id, status="failed", error=str(e))
+    finally:
+        await redis.aclose()
+
+
+@router.post("/join-results", response_model=QueryRunResponse, status_code=202)
+async def join_results(
+    request: JoinResultsRequest,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Join two previously-executed result sets."""
+    from easyweaver.core.exceptions import ValidationError as EWValidationError
+    from easyweaver.queries.models import QueryRun as QueryRunModel
+    from datetime import datetime, timezone
+    import uuid as _uuid
+
+    left_run = await service.get_query_run(db, request.left_run_id)
+    right_run = await service.get_query_run(db, request.right_run_id)
+
+    if left_run.status != "completed":
+        raise EWValidationError(f"Left dataset is not completed (status: {left_run.status})")
+    if right_run.status != "completed":
+        raise EWValidationError(f"Right dataset is not completed (status: {right_run.status})")
+
+    now = datetime.now(timezone.utc)
+    run = QueryRunModel(
+        id=_uuid.uuid4(),
+        config=request.model_dump_json(),
+        status="pending",
+        created_at=now,
+        updated_at=now,
+    )
+    await db.query_runs.insert_one(run.to_doc())
+
+    asyncio.create_task(_execute_join_results_inline(str(run.id), request))
+    return run
 
 
 @router.websocket("/ws/{run_id}")
