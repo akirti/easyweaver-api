@@ -24,8 +24,20 @@ _PARAM_RE = re.compile(r"\{(\w+)\}")
 
 
 def coerce_param_values(param_values: dict, param_defs: dict) -> dict:
-    """Coerce param values to their declared types from param definitions."""
+    """Coerce param values to their declared types from param definitions.
+
+    Also fills in default values for any params not provided.
+    """
     coerced = dict(param_values)
+
+    # Fill in defaults for missing params
+    for name, defn in param_defs.items():
+        if name not in coerced:
+            default = defn.get("default") if isinstance(defn, dict) else getattr(defn, "default", None)
+            if default is not None:
+                coerced[name] = default
+
+    # Coerce types
     for name, value in coerced.items():
         defn = param_defs.get(name)
         if not defn:
@@ -33,7 +45,6 @@ def coerce_param_values(param_values: dict, param_defs: dict) -> dict:
         ptype = defn.get("type", "string") if isinstance(defn, dict) else getattr(defn, "type", "string")
         if ptype == "number" and not isinstance(value, (int, float)):
             try:
-                # Try int first, then float
                 coerced[name] = int(value) if "." not in str(value) else float(value)
             except (ValueError, TypeError):
                 pass
