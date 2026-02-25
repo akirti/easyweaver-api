@@ -53,6 +53,19 @@ async def create_configuration(
     )
     await db.process_configurations.insert_one(config.to_doc())
     logger.info("process_configuration_created", id=str(config.id), name=config.name)
+
+    # Save config JSON to GCP if requested
+    if data.save_destination in ("gcp", "both"):
+        try:
+            gcp_path = f"process_configurations/{config.id}/v{config.version}/config.json"
+            save_config_to_gcp(config)
+            config.gcp_path = gcp_path
+            await db.process_configurations.update_one(
+                {"_id": str(config.id)}, {"$set": {"gcp_path": gcp_path}}
+            )
+        except Exception as e:
+            logger.warning("gcs_config_save_failed", id=str(config.id), error=str(e))
+
     return config
 
 
@@ -83,7 +96,23 @@ async def update_configuration(
     await db.process_configurations.update_one(
         {"_id": cid}, {"$set": updates, "$inc": {"version": 1}}
     )
-    return await get_configuration(db, cid)
+    updated = await get_configuration(db, cid)
+
+    # Save updated config to GCP if destination requires it
+    dest = data.save_destination or updated.save_destination
+    if dest in ("gcp", "both"):
+        try:
+            save_config_to_gcp(updated)
+            gcp_path = f"process_configurations/{updated.id}/v{updated.version}/config.json"
+            if updated.gcp_path != gcp_path:
+                await db.process_configurations.update_one(
+                    {"_id": cid}, {"$set": {"gcp_path": gcp_path}}
+                )
+                updated.gcp_path = gcp_path
+        except Exception as e:
+            logger.warning("gcs_config_save_failed", id=cid, error=str(e))
+
+    return updated
 
 
 async def delete_configuration(db: AsyncIOMotorDatabase, config_id: str | uuid.UUID) -> None:
