@@ -23,6 +23,26 @@ logger = structlog.get_logger()
 _PARAM_RE = re.compile(r"\{(\w+)\}")
 
 
+def coerce_param_values(param_values: dict, param_defs: dict) -> dict:
+    """Coerce param values to their declared types from param definitions."""
+    coerced = dict(param_values)
+    for name, value in coerced.items():
+        defn = param_defs.get(name)
+        if not defn:
+            continue
+        ptype = defn.get("type", "string") if isinstance(defn, dict) else getattr(defn, "type", "string")
+        if ptype == "number" and not isinstance(value, (int, float)):
+            try:
+                # Try int first, then float
+                coerced[name] = int(value) if "." not in str(value) else float(value)
+            except (ValueError, TypeError):
+                pass
+        elif ptype == "boolean" and not isinstance(value, bool):
+            if isinstance(value, str):
+                coerced[name] = value.lower() in ("true", "1", "yes")
+    return coerced
+
+
 def resolve_params(config_dict: dict, param_values: dict) -> dict:
     """Deep-clone config and replace {param_name} placeholders with actual values."""
     config_dict = copy.deepcopy(config_dict)

@@ -257,8 +257,13 @@ async def _execute_process_inline(
             config = await service.get_configuration(db, config_id)
             process_config = ProcessConfig.model_validate(config.config)
 
+            # Coerce param values to their declared types
+            from easyweaver.processes.executor import coerce_param_values
+
+            coerced_params = coerce_param_values(param_values, config.params)
+
             df = await asyncio.wait_for(
-                execute_process(process_config, param_values, db),
+                execute_process(process_config, coerced_params, db),
                 timeout=settings.query_timeout_seconds,
             )
 
