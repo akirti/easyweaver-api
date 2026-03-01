@@ -1,3 +1,4 @@
+import copy
 import uuid
 from datetime import datetime, timezone
 
@@ -33,17 +34,55 @@ async def get_configuration(
     return ProcessConfiguration.from_doc(doc)
 
 
+async def embed_source_details(db: AsyncIOMotorDatabase, config_dict: dict) -> dict:
+    """Enrich config with source_name, source_type, encrypted_credentials from DataSources."""
+    from easyweaver.sources.service import get_source
+
+    config_dict = copy.deepcopy(config_dict)
+
+    # Collect unique source_ids
+    source_ids: set[str] = set()
+    queries = config_dict.get("queries", {})
+    for _schema_name, schema_queries in queries.items():
+        for _query_name, qc in schema_queries.items():
+            sid = qc.get("source_id")
+            if sid:
+                source_ids.add(sid)
+
+    # Batch-fetch DataSource docs
+    sources: dict = {}
+    for sid in source_ids:
+        try:
+            sources[sid] = await get_source(db, sid)
+        except NotFoundError:
+            logger.warning("embed_source_details_source_not_found", source_id=sid)
+
+    # Embed details into each query config
+    for _schema_name, schema_queries in queries.items():
+        for _query_name, qc in schema_queries.items():
+            sid = qc.get("source_id")
+            source = sources.get(sid) if sid else None
+            if source:
+                qc["source_name"] = source.name
+                qc["source_type"] = source.source_type
+                qc["encrypted_credentials"] = source.encrypted_credentials
+
+    config_dict["config_version"] = 2
+    return config_dict
+
+
 async def create_configuration(
     db: AsyncIOMotorDatabase, data: ProcessConfigurationCreate, user_id: str
 ) -> ProcessConfiguration:
     now = datetime.now(timezone.utc)
+    config_dict = await embed_source_details(db, data.config.model_dump())
     config = ProcessConfiguration(
         id=uuid.uuid4(),
         user_id=user_id,
         name=data.name,
         description=data.description,
         version=1,
-        config=data.config.model_dump(),
+        config=config_dict,
         params={k: v.model_dump() for k, v in data.params.items()},
         save_destination=data.save_destination,
         gcp_path=data.gcp_path,
@@ -84,7 +123,7 @@ async def update_configuration(
     if data.params is not None:
         updates["params"] = {k: v.model_dump() for k, v in data.params.items()}
     if data.config is not None:
-        updates["config"] = data.config.model_dump()
+        updates["config"] = await embed_source_details(db, data.config.model_dump())
     if data.save_destination is not None:
         updates["save_destination"] = data.save_destination
     if data.gcp_path is not None:
@@ -181,6 +220,46 @@ async def list_process_runs(
 ) -> list[ProcessRun]:
     cursor = db.process_runs.find({"process_id": process_id}).sort("created_at", -1)
     return [ProcessRun.from_doc(doc) async for doc in cursor]
+
+
+async def refresh_process_credentials(
+    db: AsyncIOMotorDatabase, config_id: str | uuid.UUID
+) -> ProcessConfiguration:
+    """Re-fetch current creds from sources, re-embed, increment version, re-save to GCP."""
+    config = await get_configuration(db, config_id)
+    cid = str(config_id)
+
+    enriched = await embed_source_details(db, config.config)
+    now = datetime.now(timezone.utc)
+    await db.process_configurations.update_one(
+        {"_id": cid},
+        {"$set": {"config": enriched, "updated_at": now}, "$inc": {"version": 1}},
+    )
+    updated = await get_configuration(db, cid)
+
+    # Re-save to GCP if destination requires it
+    if updated.save_destination in ("gcp", "both"):
+        try:
+            save_config_to_gcp(updated)
+            gcp_path = f"process_configurations/{updated.id}/v{updated.version}/config.json"
+            if updated.gcp_path != gcp_path:
+                await db.process_configurations.update_one(
+                    {"_id": cid}, {"$set": {"gcp_path": gcp_path}}
+                )
+                updated.gcp_path = gcp_path
+        except Exception as e:
+            logger.warning("gcs_config_save_failed", id=cid, error=str(e))
+
+    logger.info("process_credentials_refreshed", id=cid, version=updated.version)
+    return updated
+
+
+def load_config_from_gcp(gcp_path: str) -> dict:
+    """Download process configuration JSON from GCS."""
+    from easyweaver.storage.gcs_client import get_gcs_client
+
+    client = get_gcs_client()
+    return client.download_json(gcp_path)
 
 
 # --- GCS helpers ---

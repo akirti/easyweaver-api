@@ -56,5 +56,9 @@ def _register_routes(app: FastAPI):
 
     app.include_router(processes_router, prefix="/api/v1/processes", tags=["processes"])
 
+    from easyweaver.dashboard.router import router as dashboard_router
+
+    app.include_router(dashboard_router, prefix="/api/v1/dashboard", tags=["dashboard"])
+
 
 app = create_app()

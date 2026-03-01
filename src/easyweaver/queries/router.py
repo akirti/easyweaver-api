@@ -209,9 +209,12 @@ async def export_results(
 async def _execute_join_results_inline(run_id: str, request: JoinResultsRequest):
     """Join two existing result sets as a background task."""
     from easyweaver.dependencies import get_meta_db, get_query_semaphore
-    from easyweaver.queries.executor import execute_join_from_results, apply_sort
+    from easyweaver.queries.executor import execute_join_from_results, apply_sort, select_columns
     from easyweaver.queries.operations.filter import apply_filters
     from easyweaver.queries.operations.transform import apply_transforms
+    from easyweaver.queries.operations.derived import apply_derived_columns
+    from easyweaver.queries.operations.group_by import apply_group_by
+    from easyweaver.queries.operations.distinct import apply_distinct
     from easyweaver.results.redis_store import RedisResultStore
     from easyweaver.settings import settings
     from redis.asyncio import Redis
@@ -230,10 +233,24 @@ async def _execute_join_results_inline(run_id: str, request: JoinResultsRequest)
                     store, str(request.left_run_id), str(request.right_run_id), request.join
                 )
 
+                if request.select_columns:
+                    df = select_columns(df, request.select_columns)
+
+                if request.derived_columns:
+                    df = apply_derived_columns(
+                        df, [d.model_dump() for d in request.derived_columns]
+                    )
+
                 if request.filters:
                     df = apply_filters(
                         df, [f.model_dump() for f in request.filters], request.filter_logic
                     )
+
+                if request.group_by:
+                    df = apply_group_by(df, request.group_by.model_dump())
+
+                if request.distinct:
+                    df = apply_distinct(df, request.distinct.model_dump())
 
                 if request.sort:
                     df = apply_sort(df, [s.model_dump() for s in request.sort])

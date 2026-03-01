@@ -12,8 +12,12 @@ from easyweaver.queries.executor import (
     _coerce_join_keys,
     apply_sort,
     execute_single_source,
+    select_columns,
 )
+from easyweaver.queries.operations.derived import apply_derived_columns
+from easyweaver.queries.operations.distinct import apply_distinct
 from easyweaver.queries.operations.filter import apply_filters
+from easyweaver.queries.operations.group_by import apply_group_by
 from easyweaver.queries.operations.transform import apply_transforms
 from easyweaver.queries.schemas import QuerySourceConfig
 from easyweaver.sources.service import get_source
@@ -85,7 +89,7 @@ def _walk_replace(obj, param_values: dict):
 async def execute_process(
     config: ProcessConfig,
     param_values: dict,
-    db: AsyncIOMotorDatabase,
+    db: AsyncIOMotorDatabase | None = None,
 ) -> pl.DataFrame:
     """Execute a saved process configuration and return the final DataFrame."""
     # Resolve parameters in the config
@@ -149,6 +153,8 @@ async def execute_process(
                 how=how,
                 suffix="_right",
             )
+            if step.select_columns:
+                joined = select_columns(joined, step.select_columns)
             results[step.key] = joined
             logger.info(
                 "process_join_step",
@@ -171,17 +177,26 @@ async def execute_process(
             "Multiple queries without logic steps — define joins to combine them"
         )
 
-    # 3. Apply operations (filters + sorts)
+    # 3. Apply derived columns
+    if resolved_config.derived_columns:
+        derived_dicts = [d.model_dump() for d in resolved_config.derived_columns]
+        df = apply_derived_columns(df, derived_dicts)
+
+    # 4. Apply operations (filters, group_by, distinct, sorts)
     if resolved_config.operations:
         ops = resolved_config.operations
         if ops.filters:
             filter_dicts = [f.model_dump() for f in ops.filters]
             df = apply_filters(df, filter_dicts, ops.filter_logic)
+        if ops.group_by:
+            df = apply_group_by(df, ops.group_by.model_dump())
+        if ops.distinct:
+            df = apply_distinct(df, ops.distinct.model_dump())
         if ops.sorts:
             sort_dicts = [s.model_dump() for s in ops.sorts]
             df = apply_sort(df, sort_dicts)
 
-    # 4. Apply transformations
+    # 5. Apply transformations
     if resolved_config.transformations:
         transform_dicts = [t.model_dump() for t in resolved_config.transformations]
         df = apply_transforms(df, transform_dicts)
@@ -190,23 +205,49 @@ async def execute_process(
 
 
 async def _execute_query(
-    db: AsyncIOMotorDatabase,
+    db: AsyncIOMotorDatabase | None,
     query_config: ProcessQueryConfig,
     key: str,
 ) -> pl.DataFrame:
-    """Execute a single process query by looking up the source and running it."""
-    source = await get_source(db, query_config.source_id)
+    """Execute a single process query.
 
-    # Convert ProcessQueryConfig to QuerySourceConfig
-    source_config = QuerySourceConfig(
-        source_id=source.id,
-        table=query_config.table,
-        columns=query_config.columns,
-        filters=[],
-        filter_logic=query_config.filter_logic,
-    )
+    Self-sufficient path: if embedded credentials exist, decrypt and connect directly.
+    Legacy fallback: look up the source from MongoDB via db.
+    """
+    if query_config.encrypted_credentials and query_config.source_type:
+        # Self-sufficient path — use embedded credentials
+        import json
 
-    df = await execute_single_source(source, source_config)
+        from easyweaver.connectors.registry import get_connector
+        from easyweaver.core.security import decrypt_credentials
+
+        creds = json.loads(decrypt_credentials(query_config.encrypted_credentials))
+        connector = get_connector(query_config.source_type, creds)
+
+        async with connector:
+            rows = await connector.execute_query(
+                table=query_config.table,
+                columns=query_config.columns,
+                filters=[],
+                filter_logic=query_config.filter_logic,
+            )
+        df = pl.DataFrame(rows) if rows else pl.DataFrame()
+    else:
+        # Legacy path — look up source from MongoDB
+        if db is None:
+            raise ProcessExecutionError(
+                f"Query '{key}' has no embedded credentials and no database connection available"
+            )
+
+        source = await get_source(db, query_config.source_id)
+        source_config = QuerySourceConfig(
+            source_id=source.id,
+            table=query_config.table,
+            columns=query_config.columns,
+            filters=[],
+            filter_logic=query_config.filter_logic,
+        )
+        df = await execute_single_source(source, source_config)
 
     # Apply per-query filters post-execution if any
     if query_config.filters:

@@ -159,6 +159,14 @@ async def execute_join_from_results(
     )
 
 
+def select_columns(df: pl.DataFrame, columns: list[str] | None) -> pl.DataFrame:
+    """Select specific columns from a DataFrame. None or empty list means keep all."""
+    if not columns:
+        return df
+    valid = [c for c in columns if c in df.columns]
+    return df.select(valid) if valid else df
+
+
 def _coerce_join_keys(
     left: pl.DataFrame,
     right: pl.DataFrame,

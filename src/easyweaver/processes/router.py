@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import uuid
 
 import structlog
@@ -22,14 +23,22 @@ router = APIRouter()
 
 
 def _config_to_response(config) -> dict:
-    """Convert a ProcessConfiguration dataclass to a response dict."""
+    """Convert a ProcessConfiguration dataclass to a response dict.
+
+    Strips encrypted_credentials from query configs to avoid leaking secrets.
+    """
+    config_data = copy.deepcopy(config.config)
+    for _schema_name, schema_queries in config_data.get("queries", {}).items():
+        for _query_name, qc in schema_queries.items():
+            qc.pop("encrypted_credentials", None)
+
     return {
         "id": str(config.id),
         "user_id": config.user_id,
         "name": config.name,
         "description": config.description,
         "version": config.version,
-        "config": config.config,
+        "config": config_data,
         "params": config.params,
         "save_destination": config.save_destination,
         "gcp_path": config.gcp_path,
@@ -213,7 +222,11 @@ async def run_process(
     )
     asyncio.create_task(
         _execute_process_inline(
-            str(run.id), config_id, request.param_values, request.save_results_to_gcp
+            str(run.id),
+            config_id,
+            request.param_values,
+            request.save_results_to_gcp,
+            config_source=request.config_source,
         )
     )
     return _run_to_response(run)
@@ -231,15 +244,34 @@ async def list_runs(
     )
 
 
+@router.post("/{config_id}/refresh-credentials", response_model=ProcessConfigurationResponse)
+async def refresh_credentials(
+    config_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    config = await service.refresh_process_credentials(db, config_id)
+    return _config_to_response(config)
+
+
 # --- Background execution ---
 
 
 async def _execute_process_inline(
-    run_id: str, config_id: str, param_values: dict, save_to_gcp: bool
+    run_id: str,
+    config_id: str,
+    param_values: dict,
+    save_to_gcp: bool,
+    config_source: str = "auto",
 ):
-    """Execute a process in the background."""
+    """Execute a process in the background.
+
+    config_source controls where to load the config from:
+      - "gcp": load directly from GCS (self-sufficient, no MongoDB needed for execution)
+      - "mongodb": load from MongoDB (legacy behavior)
+      - "auto": prefer GCP if available, fall back to MongoDB
+    """
     from easyweaver.dependencies import get_meta_db, get_query_semaphore
-    from easyweaver.processes.executor import execute_process
+    from easyweaver.processes.executor import coerce_param_values, execute_process
     from easyweaver.processes.schemas import ProcessConfig
     from easyweaver.results.redis_store import RedisResultStore
     from easyweaver.settings import settings
@@ -254,16 +286,39 @@ async def _execute_process_inline(
         async with semaphore:
             await service.update_process_run(db, run_id, status="running")
 
+            use_gcp = False
             config = await service.get_configuration(db, config_id)
-            process_config = ProcessConfig.model_validate(config.config)
 
-            # Coerce param values to their declared types
-            from easyweaver.processes.executor import coerce_param_values
+            if config_source == "gcp" or (
+                config_source == "auto"
+                and config.gcp_path
+                and config.save_destination in ("gcp", "both")
+            ):
+                # Try loading from GCP for self-sufficient execution
+                try:
+                    gcp_doc = service.load_config_from_gcp(config.gcp_path)
+                    process_config = ProcessConfig.model_validate(gcp_doc.get("config", {}))
+                    param_defs = gcp_doc.get("params", {})
+                    use_gcp = True
+                except Exception as e:
+                    if config_source == "gcp":
+                        raise
+                    logger.warning(
+                        "gcp_config_load_fallback",
+                        config_id=config_id,
+                        error=str(e),
+                    )
 
-            coerced_params = coerce_param_values(param_values, config.params)
+            if not use_gcp:
+                # MongoDB path (legacy)
+                process_config = ProcessConfig.model_validate(config.config)
+                param_defs = config.params
 
+            coerced_params = coerce_param_values(param_values, param_defs)
+
+            exec_db = None if use_gcp else db
             df = await asyncio.wait_for(
-                execute_process(process_config, coerced_params, db),
+                execute_process(process_config, coerced_params, db=exec_db),
                 timeout=settings.query_timeout_seconds,
             )
 

@@ -57,6 +57,51 @@ class TransformSpec(BaseModel):
         return self
 
 
+class DerivedColumnSpec(BaseModel):
+    name: str
+    expression_type: Literal["concat", "math", "date_part", "conditional", "literal"]
+
+    # For concat
+    columns: list[str] | None = None
+    separator: str = ""
+
+    # For math
+    expression: str | None = None
+
+    # For date_part
+    source_column: str | None = None
+    part: Literal[
+        "year", "month", "day", "hour", "minute", "second", "day_of_week", "quarter"
+    ] | None = None
+
+    # For conditional
+    condition_column: str | None = None
+    condition_operator: str | None = None
+    condition_value: Any = None
+    then_value: Any = None
+    else_value: Any = None
+
+    # For literal
+    value: Any = None
+
+
+class AggregationSpec(BaseModel):
+    column: str
+    function: Literal["count", "sum", "avg", "min", "max", "count_distinct"]
+    alias: str | None = None
+
+
+class GroupBySpec(BaseModel):
+    group_columns: list[str]
+    aggregations: list[AggregationSpec]
+
+
+class DistinctSpec(BaseModel):
+    enabled: bool = True
+    columns: list[str] | None = None
+    keep: Literal["first", "last", "any", "none"] = "first"
+
+
 class QuerySourceConfig(BaseModel):
     source_id: uuid.UUID
     table: str
@@ -96,8 +141,12 @@ class JoinResultsRequest(BaseModel):
     left_run_id: uuid.UUID
     right_run_id: uuid.UUID
     join: JoinConfig
+    select_columns: list[str] | None = None
+    derived_columns: list[DerivedColumnSpec] = Field(default_factory=list)
     filters: list[FilterCondition] = Field(default_factory=list)
     filter_logic: Literal["and", "or"] = "and"
+    group_by: GroupBySpec | None = None
+    distinct: DistinctSpec | None = None
     sort: list[SortSpec] = Field(default_factory=list)
     transforms: list[TransformSpec] = Field(default_factory=list)
 

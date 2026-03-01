@@ -42,6 +42,11 @@ async def init_db():
     await _meta_db.process_configurations.create_index("user_id")
     await _meta_db.process_runs.create_index("created_at")
     await _meta_db.process_runs.create_index("process_id")
+    await _meta_db.dashboard_configs.create_index("user_id")
+    await _meta_db.dashboard_configs.create_index("created_at")
+    await _meta_db.data_snapshots.create_index("config_id")
+    await _meta_db.data_snapshots.create_index("captured_at")
+    await _meta_db.data_snapshots.create_index([("config_id", 1), ("captured_at", -1)])
 
 
 async def shutdown_db():

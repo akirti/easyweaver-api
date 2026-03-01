@@ -5,7 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from easyweaver.queries.schemas import SortSpec
+from easyweaver.queries.schemas import DerivedColumnSpec, DistinctSpec, GroupBySpec, SortSpec
 
 
 class ParamDefinition(BaseModel):
@@ -27,6 +27,10 @@ class ProcessQueryConfig(BaseModel):
     columns: list[str] | None = None
     filters: list[ProcessFilterConfig] = Field(default_factory=list)
     filter_logic: Literal["and", "or"] = "and"
+    # Embedded source details for self-sufficient configs (v2+)
+    source_name: str | None = None
+    source_type: str | None = None
+    encrypted_credentials: str | None = None
 
 
 class ProcessLogicStep(BaseModel):
@@ -37,11 +41,14 @@ class ProcessLogicStep(BaseModel):
     join_type: Literal["inner", "left", "right", "outer"] = "inner"
     left_on: list[str]
     right_on: list[str]
+    select_columns: list[str] | None = None
 
 
 class ProcessOperations(BaseModel):
     filters: list[ProcessFilterConfig] = Field(default_factory=list)
     filter_logic: Literal["and", "or"] = "and"
+    group_by: GroupBySpec | None = None
+    distinct: DistinctSpec | None = None
     sorts: list[SortSpec] = Field(default_factory=list)
 
 
@@ -57,8 +64,10 @@ class ProcessTransformation(BaseModel):
 class ProcessConfig(BaseModel):
     queries: dict[str, dict[str, ProcessQueryConfig]]
     logics: list[ProcessLogicStep] = Field(default_factory=list)
+    derived_columns: list[DerivedColumnSpec] = Field(default_factory=list)
     operations: ProcessOperations | None = None
     transformations: list[ProcessTransformation] = Field(default_factory=list)
+    config_version: int = 1
 
 
 class ProcessConfigurationCreate(BaseModel):
@@ -101,6 +110,7 @@ class ProcessConfigurationResponse(BaseModel):
 class ProcessRunRequest(BaseModel):
     param_values: dict[str, Any] = Field(default_factory=dict)
     save_results_to_gcp: bool = False
+    config_source: Literal["auto", "mongodb", "gcp"] = "auto"
 
 
 class ProcessRunResponse(BaseModel):
