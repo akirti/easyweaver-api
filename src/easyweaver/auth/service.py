@@ -38,10 +38,37 @@ def create_refresh_token(user_id: str) -> str:
 
 
 def decode_token(token: str) -> dict:
+    # Try easyweaver's own JWT first
     try:
-        return jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
-    except JWTError as e:
-        raise AuthenticationError(f"Invalid token: {e}")
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
+        payload["_token_source"] = "easyweaver"
+        return payload
+    except JWTError:
+        pass
+
+    # Try admin-panel JWT if shared secret is configured
+    if settings.admin_jwt_secret_key:
+        try:
+            decode_opts: dict = {"algorithms": ["HS256"]}
+            # Only validate issuer/audience if explicitly configured
+            if settings.admin_jwt_audience:
+                decode_opts["audience"] = settings.admin_jwt_audience
+            else:
+                decode_opts["options"] = {"verify_aud": False}
+            payload = jwt.decode(
+                token,
+                settings.admin_jwt_secret_key,
+                **decode_opts,
+            )
+            # Verify issuer manually if configured (jose doesn't have issuer= param)
+            if settings.admin_jwt_issuer and payload.get("iss") != settings.admin_jwt_issuer:
+                raise JWTError(f"Invalid issuer: {payload.get('iss')}")
+            payload["_token_source"] = "admin_panel"
+            return payload
+        except JWTError as e:
+            raise AuthenticationError(f"Invalid token: {e}")
+
+    raise AuthenticationError("Invalid token")
 
 
 async def register_user(db: AsyncIOMotorDatabase, data: RegisterRequest) -> User:

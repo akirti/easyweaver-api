@@ -1,4 +1,6 @@
 
+import uuid
+
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -19,6 +21,28 @@ async def get_current_user(
         raise AuthenticationError("Not authenticated")
 
     payload = decode_token(credentials.credentials)
+
+    # Admin-panel token: build User from JWT claims (no DB lookup)
+    if payload.get("_token_source") == "admin_panel":
+        if payload.get("type") != "access":
+            raise AuthenticationError("Invalid token type")
+        # Admin-panel user_id is a MongoDB ObjectId string, not a UUID.
+        # Use a deterministic UUID derived from it for compatibility.
+        raw_id = payload.get("user_id", "")
+        try:
+            user_uuid = uuid.UUID(raw_id)
+        except (ValueError, AttributeError):
+            user_uuid = uuid.uuid5(uuid.NAMESPACE_URL, f"admin-panel:{raw_id}")
+        return User(
+            id=user_uuid,
+            email=payload.get("email", "unknown"),
+            hashed_password="",
+            display_name=payload.get("email", "Admin User"),
+            role="admin",
+            is_active=True,
+        )
+
+    # Easyweaver's own token: existing flow
     if payload.get("type") != "access":
         raise AuthenticationError("Invalid token type")
 

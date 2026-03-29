@@ -26,7 +26,7 @@ DOCKER_MODE = "--docker" in sys.argv
 PG_DSN = os.environ.get(
     "SEED_PG_DSN", "postgresql://easyweaver:easyweaver@localhost:5432/easyweaver"
 )
-MONGO_URI = os.environ.get("SEED_MONGO_URI", "mongodb://easyweaver:easyweaver@localhost:27018")
+MONGO_URI = os.environ.get("SEED_MONGO_URI", "mongodb://admin:password123@localhost:27017")
 MONGO_DEMO_DB = "easyweaver_demo"
 MONGO_META_DB = "easyweaver_meta"
 

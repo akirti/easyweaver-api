@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 7
 
+    # Auth bridge — accept admin-panel JWTs when embedded
+    admin_jwt_secret_key: str = ""  # When set, also accepts tokens signed with this key
+    admin_jwt_issuer: str = "easylife-auth"
+    admin_jwt_audience: str = "easylife-api"
+
     # Encryption
     fernet_key: str = "change-me-generate-with-cryptography-fernet"
 
