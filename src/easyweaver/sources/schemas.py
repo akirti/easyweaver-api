@@ -14,13 +14,18 @@ class PostgresCredentials(BaseModel):
     database: str
     user: str
     password: str
+    ssl_mode: str = "disable"
+    ssl_client_cert: str = ""
+    ssl_client_key: str = ""
+    ssl_ca_cert: str = ""
 
 
 class MongoCredentials(BaseModel):
     type: Literal["mongodb"] = "mongodb"
-    host: str
-    port: int = 27017
-    database: str
+    connection_string: str = ""
+    host: str = ""
+    port: int | None = None
+    database: str = ""
     user: str = ""
     password: str = ""
     auth_database: str = "admin"
