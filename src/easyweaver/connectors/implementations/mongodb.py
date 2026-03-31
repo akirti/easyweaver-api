@@ -31,14 +31,30 @@ class MongoDBConnector(BaseConnector):
 
     def _uri(self) -> str:
         c = self.credentials
+        # If a direct connection string is provided, use it as-is
+        connection_string = c.get("connection_string", "")
+        if connection_string:
+            return connection_string
+
         host = c.get("host", "localhost")
-        port = c.get("port", 27017)
+        port = c.get("port")
         user = c.get("user", "")
         password = c.get("password", "")
         auth_db = c.get("auth_database", "admin")
-        if user and password:
-            return f"mongodb://{user}:{password}@{host}:{port}/{self._db_name}?authSource={auth_db}"
-        return f"mongodb://{host}:{port}/{self._db_name}"
+
+        # Detect SRV-style hosts (no port, typically cloud Atlas)
+        is_srv = not port or "mongodb.net" in host or "mongodb+srv" in host
+
+        if is_srv:
+            # Strip any protocol prefix the user may have included
+            clean_host = host.replace("mongodb+srv://", "").replace("mongodb://", "").rstrip("/")
+            if user and password:
+                return f"mongodb+srv://{user}:{password}@{clean_host}/{self._db_name}?authSource={auth_db}"
+            return f"mongodb+srv://{clean_host}/{self._db_name}"
+        else:
+            if user and password:
+                return f"mongodb://{user}:{password}@{host}:{port}/{self._db_name}?authSource={auth_db}"
+            return f"mongodb://{host}:{port}/{self._db_name}"
 
     @property
     def _db(self):
