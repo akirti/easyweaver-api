@@ -1,3 +1,6 @@
+import base64
+import ssl
+import tempfile
 import time
 from typing import Any
 
@@ -15,29 +18,105 @@ class PostgresConnector(BaseConnector):
         super().__init__(credentials)
         self._pool: asyncpg.Pool | None = None
         self._column_types: dict[str, dict[str, str]] = {}  # table -> {col: type}
+        self._temp_files: list[str] = []  # track temp cert files for cleanup
 
     def _dsn(self) -> str:
         c = self.credentials
         return f"postgresql://{c['user']}:{c['password']}@{c['host']}:{c.get('port', 5432)}/{c['database']}"
 
+    def _build_ssl_context(self) -> ssl.SSLContext | bool | None:
+        """Build SSL context from credentials if SSL is configured."""
+        c = self.credentials
+        ssl_mode = c.get("ssl_mode", "disable")
+
+        if ssl_mode == "disable":
+            return None
+
+        # For 'require' without certs, just enable SSL without verification
+        if ssl_mode == "require" and not c.get("ssl_ca_cert"):
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            return ctx
+
+        # For verify-ca / verify-full or when certs are provided
+        ctx = ssl.create_default_context()
+
+        if ssl_mode == "verify-full":
+            ctx.check_hostname = True
+            ctx.verify_mode = ssl.CERT_REQUIRED
+        elif ssl_mode == "verify-ca":
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_REQUIRED
+        else:
+            # prefer / require with certs
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+        # Write base64-encoded certificates to temp files
+        if c.get("ssl_ca_cert"):
+            ca_path = self._write_temp_cert(c["ssl_ca_cert"])
+            ctx.load_verify_locations(ca_path)
+            if ssl_mode in ("verify-ca", "verify-full"):
+                ctx.verify_mode = ssl.CERT_REQUIRED
+
+        if c.get("ssl_client_cert") and c.get("ssl_client_key"):
+            cert_path = self._write_temp_cert(c["ssl_client_cert"])
+            key_path = self._write_temp_cert(c["ssl_client_key"])
+            ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+        elif c.get("ssl_client_cert"):
+            cert_path = self._write_temp_cert(c["ssl_client_cert"])
+            ctx.load_cert_chain(certfile=cert_path)
+
+        return ctx
+
+    def _write_temp_cert(self, b64_content: str) -> str:
+        """Decode base64 cert content and write to a temp file. Returns the file path."""
+        content = base64.b64decode(b64_content)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+        tmp.write(content)
+        tmp.close()
+        self._temp_files.append(tmp.name)
+        return tmp.name
+
+    def _cleanup_temp_files(self) -> None:
+        import os
+        for path in self._temp_files:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        self._temp_files.clear()
+
     async def connect(self) -> None:
-        self._pool = await asyncpg.create_pool(self._dsn(), min_size=1, max_size=5)
+        ssl_ctx = self._build_ssl_context()
+        kwargs: dict[str, Any] = {"min_size": 1, "max_size": 5}
+        if ssl_ctx is not None:
+            kwargs["ssl"] = ssl_ctx
+        self._pool = await asyncpg.create_pool(self._dsn(), **kwargs)
 
     async def disconnect(self) -> None:
         if self._pool:
             await self._pool.close()
             self._pool = None
+        self._cleanup_temp_files()
 
     async def test_connection(self) -> dict[str, Any]:
         start = time.monotonic()
         try:
-            pool = await asyncpg.create_pool(self._dsn(), min_size=1, max_size=1)
+            ssl_ctx = self._build_ssl_context()
+            kwargs: dict[str, Any] = {"min_size": 1, "max_size": 1}
+            if ssl_ctx is not None:
+                kwargs["ssl"] = ssl_ctx
+            pool = await asyncpg.create_pool(self._dsn(), **kwargs)
             async with pool.acquire() as conn:
                 await conn.fetchval("SELECT 1")
             await pool.close()
+            self._cleanup_temp_files()
             latency = round((time.monotonic() - start) * 1000, 1)
             return {"success": True, "latency_ms": latency, "message": "Connection successful"}
         except Exception as e:
+            self._cleanup_temp_files()
             return {"success": False, "latency_ms": None, "message": str(e)}
 
     async def get_schema(self) -> list[dict[str, Any]]:
