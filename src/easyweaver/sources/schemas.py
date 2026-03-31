@@ -23,6 +23,7 @@ class PostgresCredentials(BaseModel):
 class MongoCredentials(BaseModel):
     type: Literal["mongodb"] = "mongodb"
     connection_string: str = ""
+    scheme: Literal["mongodb", "mongodb+srv"] = "mongodb"
     host: str = ""
     port: int | None = None
     database: str = ""

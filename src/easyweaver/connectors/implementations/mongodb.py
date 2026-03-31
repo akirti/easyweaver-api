@@ -41,20 +41,22 @@ class MongoDBConnector(BaseConnector):
         user = c.get("user", "")
         password = c.get("password", "")
         auth_db = c.get("auth_database", "admin")
+        scheme = c.get("scheme", "mongodb")
 
-        # Detect SRV-style hosts (no port, typically cloud Atlas)
-        is_srv = not port or "mongodb.net" in host or "mongodb+srv" in host
+        # Strip any protocol prefix the user may have included in the host
+        clean_host = host.replace("mongodb+srv://", "").replace("mongodb://", "").rstrip("/")
+
+        is_srv = scheme == "mongodb+srv"
 
         if is_srv:
-            # Strip any protocol prefix the user may have included
-            clean_host = host.replace("mongodb+srv://", "").replace("mongodb://", "").rstrip("/")
             if user and password:
                 return f"mongodb+srv://{user}:{password}@{clean_host}/{self._db_name}?authSource={auth_db}"
             return f"mongodb+srv://{clean_host}/{self._db_name}"
         else:
+            actual_port = port or 27017
             if user and password:
-                return f"mongodb://{user}:{password}@{host}:{port}/{self._db_name}?authSource={auth_db}"
-            return f"mongodb://{host}:{port}/{self._db_name}"
+                return f"mongodb://{user}:{password}@{clean_host}:{actual_port}/{self._db_name}?authSource={auth_db}"
+            return f"mongodb://{clean_host}:{actual_port}/{self._db_name}"
 
     @property
     def _db(self):
