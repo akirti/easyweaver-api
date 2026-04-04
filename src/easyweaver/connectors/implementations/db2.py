@@ -30,6 +30,14 @@ class DB2Connector(BaseConnector):
         self._conn: Any = None
         self._column_types: dict[str, dict[str, str]] = {}
 
+    @staticmethod
+    def _qualified_table_name(table: str) -> str:
+        """Return a properly quoted schema.table SQL identifier."""
+        if '.' in table:
+            schema, tbl = table.split('.', 1)
+            return f'"{schema}"."{tbl}"'
+        return f'"{table}"'
+
     def _connection_string(self) -> str:
         c = self.credentials
         return (
@@ -80,12 +88,13 @@ class DB2Connector(BaseConnector):
             cursor = self._conn.cursor()
             cursor.execute(
                 """
-                SELECT t.TABNAME, c.COLNAME, c.TYPENAME, c.NULLS, c.KEYSEQ, t.CARD
+                SELECT t.TABSCHEMA, t.TABNAME, c.COLNAME, c.TYPENAME, c.NULLS, c.KEYSEQ, t.CARD
                 FROM SYSCAT.TABLES t
                 JOIN SYSCAT.COLUMNS c
                     ON t.TABSCHEMA = c.TABSCHEMA AND t.TABNAME = c.TABNAME
-                WHERE t.TABSCHEMA = CURRENT SCHEMA AND t.TYPE = 'T'
-                ORDER BY t.TABNAME, c.COLNO
+                WHERE t.TABSCHEMA NOT IN ('SYSCAT', 'SYSIBM', 'SYSSTAT', 'SYSTOOLS')
+                    AND t.TYPE = 'T'
+                ORDER BY t.TABSCHEMA, t.TABNAME, c.COLNO
                 """
             )
             cols = [desc[0] for desc in cursor.description]
@@ -97,7 +106,7 @@ class DB2Connector(BaseConnector):
 
         tables: dict[str, dict] = {}
         for row in rows:
-            tn = row["TABNAME"].strip()
+            tn = f"{row['TABSCHEMA'].strip()}.{row['TABNAME'].strip()}"
             if tn not in tables:
                 tables[tn] = {
                     "name": tn,
@@ -126,7 +135,8 @@ class DB2Connector(BaseConnector):
 
         def _fetch() -> dict[str, Any]:
             cursor = self._conn.cursor()
-            cursor.execute(f'SELECT * FROM "{table_name}" FETCH FIRST {int(limit)} ROWS ONLY')
+            sql_table = DB2Connector._qualified_table_name(table_name)
+            cursor.execute(f'SELECT * FROM {sql_table} FETCH FIRST {int(limit)} ROWS ONLY')
             cols = [desc[0] for desc in cursor.description]
             rows = cursor.fetchall()
             cursor.close()
@@ -144,13 +154,25 @@ class DB2Connector(BaseConnector):
             return self._column_types[table]
         assert self._conn
 
+        if '.' in table:
+            schema, tbl = table.split('.', 1)
+        else:
+            schema, tbl = None, table
+
         def _fetch() -> dict[str, str]:
             cursor = self._conn.cursor()
-            cursor.execute(
-                "SELECT COLNAME, TYPENAME FROM SYSCAT.COLUMNS "
-                "WHERE TABSCHEMA = CURRENT SCHEMA AND TABNAME = ?",
-                (table,),
-            )
+            if schema is not None:
+                cursor.execute(
+                    "SELECT COLNAME, TYPENAME FROM SYSCAT.COLUMNS "
+                    "WHERE TABSCHEMA = ? AND TABNAME = ?",
+                    (schema, tbl),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COLNAME, TYPENAME FROM SYSCAT.COLUMNS "
+                    "WHERE TABSCHEMA = CURRENT SCHEMA AND TABNAME = ?",
+                    (tbl,),
+                )
             rows = cursor.fetchall()
             cursor.close()
             return {r[0].strip(): r[1].strip().lower() for r in rows}
@@ -198,7 +220,8 @@ class DB2Connector(BaseConnector):
         col_types = await self._get_column_types(table) if filters else {}
 
         col_clause = ", ".join(f'"{c}"' for c in columns) if columns else "*"
-        query = f'SELECT {col_clause} FROM "{table}"'
+        sql_table = self._qualified_table_name(table)
+        query = f'SELECT {col_clause} FROM {sql_table}'
         params: list[Any] = []
 
         if filters:

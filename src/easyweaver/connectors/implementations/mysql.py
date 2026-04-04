@@ -15,6 +15,14 @@ class MySQLConnector(BaseConnector):
         self._pool: aiomysql.Pool | None = None
         self._column_types: dict[str, dict[str, str]] = {}
 
+    @staticmethod
+    def _qualified_table_name(table: str) -> str:
+        """Return a properly quoted schema.table SQL identifier."""
+        if '.' in table:
+            schema, tbl = table.split('.', 1)
+            return f'`{schema}`.`{tbl}`'
+        return f'`{table}`'
+
     async def connect(self) -> None:
         c = self.credentials
         self._pool = await aiomysql.create_pool(
@@ -84,9 +92,10 @@ class MySQLConnector(BaseConnector):
                 await cur.execute(query, (self.credentials["database"],))
                 rows = await cur.fetchall()
 
+        db_name = self.credentials["database"]
         tables: dict[str, dict] = {}
         for row in rows:
-            tn = row["TABLE_NAME"]
+            tn = f"{db_name}.{row['TABLE_NAME']}"
             if tn not in tables:
                 tables[tn] = {
                     "name": tn,
@@ -114,7 +123,8 @@ class MySQLConnector(BaseConnector):
         assert self._pool
         async with self._pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute(f"SELECT * FROM `{table_name}` LIMIT %s", (limit,))
+                sql_table = self._qualified_table_name(table_name)
+                await cur.execute(f"SELECT * FROM {sql_table} LIMIT %s", (limit,))
                 rows = await cur.fetchall()
                 columns = [{"name": k, "type": "text"} for k in rows[0].keys()] if rows else []
                 return {
@@ -127,6 +137,10 @@ class MySQLConnector(BaseConnector):
         if table in self._column_types:
             return self._column_types[table]
         assert self._pool
+        if '.' in table:
+            db, tbl = table.split('.', 1)
+        else:
+            db, tbl = self.credentials["database"], table
         query = """
             SELECT COLUMN_NAME, DATA_TYPE
             FROM information_schema.COLUMNS
@@ -134,7 +148,7 @@ class MySQLConnector(BaseConnector):
         """
         async with self._pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute(query, (self.credentials["database"], table))
+                await cur.execute(query, (db, tbl))
                 rows = await cur.fetchall()
         mapping = {r["COLUMN_NAME"]: r["DATA_TYPE"] for r in rows}
         self._column_types[table] = mapping
@@ -179,7 +193,8 @@ class MySQLConnector(BaseConnector):
         col_types = await self._get_column_types(table) if filters else {}
 
         col_clause = ", ".join(f"`{c}`" for c in columns) if columns else "*"
-        query = f"SELECT {col_clause} FROM `{table}`"
+        sql_table = self._qualified_table_name(table)
+        query = f"SELECT {col_clause} FROM {sql_table}"
         params: list[Any] = []
 
         if filters:

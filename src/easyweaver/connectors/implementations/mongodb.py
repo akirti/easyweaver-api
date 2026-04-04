@@ -1,5 +1,6 @@
 import json
 import time
+from datetime import datetime, date
 from typing import Any
 
 from bson import ObjectId
@@ -128,7 +129,7 @@ class MongoDBConnector(BaseConnector):
     ) -> list[dict[str, Any]]:
         coll = self._db[table]
         mongo_filter = self._build_filter(filters, filter_logic) if filters else {}
-        projection = {c.replace("[].", "."): 1 for c in columns} if columns else None
+        projection = {self._col_to_mongo_path(c): 1 for c in columns} if columns else None
         cursor = coll.find(mongo_filter, projection)
 
         if sort:
@@ -145,10 +146,21 @@ class MongoDBConnector(BaseConnector):
         return self._serialize_docs(docs)
 
     @staticmethod
+    def _col_to_mongo_path(col: str) -> str:
+        """Convert flattened column name to MongoDB dot-notation path.
+
+        addresses[0].line1 -> addresses.line1
+        addresses[].line1  -> addresses.line1  (legacy)
+        user.name          -> user.name        (unchanged)
+        """
+        import re
+        return re.sub(r"\[\d*\]", "", col)
+
+    @staticmethod
     def _build_filter(filters: list[dict], logic: str = "and") -> dict:
         conditions = []
         for f in filters:
-            col = f["column"].replace("[].", ".")
+            col = MongoDBConnector._col_to_mongo_path(f["column"])
             op = f["operator"]
             val = f.get("value")
             if op == "eq":
@@ -185,31 +197,22 @@ class MongoDBConnector(BaseConnector):
 
     @staticmethod
     def _infer_columns(docs: list[dict], max_depth: int = 3) -> list[dict[str, Any]]:
-        """Infer column names and types, recursing into nested dicts."""
+        """Infer column names and types from flattened documents.
+
+        Uses the actual _flatten_doc output to discover all columns, ensuring
+        the schema matches what execute_query will return (including indexed
+        array columns like addresses[0].line1, addresses[1].line1).
+        """
         field_types: dict[str, set[str]] = {}
 
-        def _collect(obj: dict, prefix: str = "", depth: int = 0):
-            for key, value in obj.items():
-                if key == "_id" and not prefix:
-                    continue
-                full_key = f"{prefix}{key}" if prefix else key
-                if isinstance(value, dict) and depth < max_depth:
-                    _collect(value, f"{full_key}.", depth + 1)
-                elif (
-                    isinstance(value, list)
-                    and value
-                    and isinstance(value[0], dict)
-                    and depth < max_depth
-                ):
-                    _collect(value[0], f"{full_key}[].", depth + 1)
-                else:
-                    if full_key not in field_types:
-                        field_types[full_key] = set()
-                    t = type(value).__name__
-                    field_types[full_key].add(t)
-
         for doc in docs:
-            _collect(doc)
+            flat = MongoDBConnector._flatten_doc(doc, max_depth=max_depth)
+            for k, v in flat.items():
+                if k == "_id":
+                    continue
+                if k not in field_types:
+                    field_types[k] = set()
+                field_types[k].add(type(v).__name__)
 
         columns = []
         type_map = {
@@ -219,6 +222,8 @@ class MongoDBConnector(BaseConnector):
             "bool": "boolean",
             "list": "array",
             "NoneType": "null",
+            "datetime": "datetime",
+            "date": "date",
         }
         for name, types in sorted(field_types.items()):
             types_no_null = types - {"NoneType"}
@@ -239,42 +244,50 @@ class MongoDBConnector(BaseConnector):
 
     @staticmethod
     def _make_serializable(v: Any) -> Any:
-        """Convert non-JSON-serializable types to strings."""
+        """Convert non-JSON-serializable types to Python-native types."""
         if isinstance(v, ObjectId):
             return str(v)
+        if isinstance(v, datetime):
+            return v.isoformat()
+        if isinstance(v, date):
+            return v.isoformat()
         if isinstance(v, (dict, list)):
             return json.dumps(v, default=str)
         return v
 
     @staticmethod
     def _flatten_doc(doc: dict, prefix: str = "", max_depth: int = 3, depth: int = 0) -> dict:
-        """Flatten nested dicts and arrays into dot-path keys matching column names."""
+        """Flatten nested dicts and arrays into dot-path keys matching column names.
+
+        Arrays of objects are expanded with numeric indices to avoid path
+        collisions. Example:
+            addresses: [{line1: "a", type: "home"}, {line1: "b", type: "office"}]
+        becomes:
+            addresses[0].line1 = "a"
+            addresses[0].type  = "home"
+            addresses[1].line1 = "b"
+            addresses[1].type  = "office"
+        """
         flat: dict[str, Any] = {}
         for k, v in doc.items():
             key = f"{prefix}{k}" if prefix else k
             if k == "_id" and not prefix:
-                flat[k] = str(v)
+                flat[key] = str(v)
             elif isinstance(v, dict) and depth < max_depth:
                 flat.update(MongoDBConnector._flatten_doc(v, f"{key}.", max_depth, depth + 1))
             elif isinstance(v, list) and v and isinstance(v[0], dict) and depth < max_depth:
-                # Array of dicts: extract each sub-field across all elements
-                all_sub_keys: set[str] = set()
-                for elem in v:
+                for idx, elem in enumerate(v):
                     if isinstance(elem, dict):
-                        all_sub_keys.update(elem.keys())
-                for sub_key in sorted(all_sub_keys):
-                    arr_key = f"{key}[].{sub_key}"
-                    vals = [elem.get(sub_key) for elem in v if isinstance(elem, dict)]
-                    # Collapse to single value if all same, else comma-join
-                    primitives = [
-                        MongoDBConnector._make_serializable(x) for x in vals if x is not None
-                    ]
-                    if len(primitives) == 1:
-                        flat[arr_key] = primitives[0]
-                    elif primitives:
-                        flat[arr_key] = ", ".join(str(x) for x in primitives)
-                    else:
-                        flat[arr_key] = None
+                        elem_prefix = f"{key}[{idx}]."
+                        flat.update(
+                            MongoDBConnector._flatten_doc(
+                                elem, elem_prefix, max_depth, depth + 1
+                            )
+                        )
+            elif isinstance(v, list) and v and not isinstance(v[0], dict):
+                flat[key] = ", ".join(
+                    str(MongoDBConnector._make_serializable(x)) for x in v
+                )
             else:
                 flat[key] = MongoDBConnector._make_serializable(v)
         return flat

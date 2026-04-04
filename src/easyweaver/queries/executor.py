@@ -201,5 +201,17 @@ def paginate_dataframe(
     total = len(df)
     offset = (page - 1) * page_size
     page_df = df.slice(offset, page_size)
+
+    # Cast any temporal columns to string for JSON-safe serialisation
+    temporal_cols = [
+        c for c, t in page_df.schema.items()
+        if t in (pl.Datetime, pl.Date, pl.Time, pl.Duration)
+        or str(t).startswith("Datetime")
+    ]
+    if temporal_cols:
+        page_df = page_df.with_columns(
+            [pl.col(c).cast(pl.Utf8).alias(c) for c in temporal_cols]
+        )
+
     rows = page_df.to_dicts()
     return rows, total

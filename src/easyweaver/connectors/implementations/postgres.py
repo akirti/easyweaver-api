@@ -20,6 +20,14 @@ class PostgresConnector(BaseConnector):
         self._column_types: dict[str, dict[str, str]] = {}  # table -> {col: type}
         self._temp_files: list[str] = []  # track temp cert files for cleanup
 
+    @staticmethod
+    def _qualified_table_name(table: str) -> str:
+        """Return a properly quoted schema.table SQL identifier."""
+        if '.' in table:
+            schema, tbl = table.split('.', 1)
+            return f'"{schema}"."{tbl}"'
+        return f'"public"."{table}"'
+
     def _dsn(self) -> str:
         c = self.credentials
         return f"postgresql://{c['user']}:{c['password']}@{c['host']}:{c.get('port', 5432)}/{c['database']}"
@@ -123,31 +131,38 @@ class PostgresConnector(BaseConnector):
         assert self._pool
         query = """
             SELECT
+                t.table_schema,
                 t.table_name,
                 c.column_name,
                 c.data_type,
                 c.is_nullable,
                 CASE WHEN pk.column_name IS NOT NULL THEN true ELSE false END as is_primary_key,
-                (SELECT reltuples::bigint FROM pg_class WHERE relname = t.table_name) as row_estimate
+                COALESCE(s.n_live_tup, 0) as row_estimate
             FROM information_schema.tables t
             JOIN information_schema.columns c
                 ON t.table_name = c.table_name AND t.table_schema = c.table_schema
             LEFT JOIN (
-                SELECT ku.column_name, ku.table_name
+                SELECT ku.column_name, ku.table_name, ku.table_schema
                 FROM information_schema.table_constraints tc
                 JOIN information_schema.key_column_usage ku
                     ON tc.constraint_name = ku.constraint_name
+                    AND tc.table_schema = ku.table_schema
                 WHERE tc.constraint_type = 'PRIMARY KEY'
-            ) pk ON pk.column_name = c.column_name AND pk.table_name = t.table_name
-            WHERE t.table_schema = 'public' AND t.table_type = 'BASE TABLE'
-            ORDER BY t.table_name, c.ordinal_position
+            ) pk ON pk.column_name = c.column_name
+                AND pk.table_name = t.table_name
+                AND pk.table_schema = t.table_schema
+            LEFT JOIN pg_stat_user_tables s
+                ON s.schemaname = t.table_schema AND s.relname = t.table_name
+            WHERE t.table_schema NOT IN ('information_schema', 'pg_catalog', 'pg_toast')
+                AND t.table_type = 'BASE TABLE'
+            ORDER BY t.table_schema, t.table_name, c.ordinal_position
         """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query)
 
         tables: dict[str, dict] = {}
         for row in rows:
-            tn = row["table_name"]
+            tn = f"{row['table_schema']}.{row['table_name']}"
             if tn not in tables:
                 tables[tn] = {
                     "name": tn,
@@ -174,8 +189,9 @@ class PostgresConnector(BaseConnector):
     async def preview_table(self, table_name: str, limit: int = 50) -> dict[str, Any]:
         assert self._pool
         # Safe: table_name is validated against schema
+        sql_table = self._qualified_table_name(table_name)
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(f'SELECT * FROM "{table_name}" LIMIT $1', limit)
+            rows = await conn.fetch(f'SELECT * FROM {sql_table} LIMIT $1', limit)
             columns = [{"name": k, "type": "text"} for k in rows[0].keys()] if rows else []
             return {
                 "columns": columns,
@@ -188,13 +204,17 @@ class PostgresConnector(BaseConnector):
         if table in self._column_types:
             return self._column_types[table]
         assert self._pool
+        if '.' in table:
+            schema, tbl = table.split('.', 1)
+        else:
+            schema, tbl = 'public', table
         query = """
             SELECT column_name, data_type
             FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = $1
+            WHERE table_schema = $1 AND table_name = $2
         """
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(query, table)
+            rows = await conn.fetch(query, schema, tbl)
         mapping = {r["column_name"]: r["data_type"] for r in rows}
         self._column_types[table] = mapping
         return mapping
@@ -239,7 +259,8 @@ class PostgresConnector(BaseConnector):
         col_types = await self._get_column_types(table) if filters else {}
 
         col_clause = ", ".join(f'"{c}"' for c in columns) if columns else "*"
-        query = f'SELECT {col_clause} FROM "{table}"'
+        sql_table = self._qualified_table_name(table)
+        query = f'SELECT {col_clause} FROM {sql_table}'
         params: list[Any] = []
         idx = 1
 
