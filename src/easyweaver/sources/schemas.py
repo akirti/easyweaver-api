@@ -39,6 +39,10 @@ class MySQLCredentials(BaseModel):
     database: str
     user: str
     password: str
+    ssl_mode: str = "disable"
+    ssl_ca_cert: str = ""
+    ssl_client_cert: str = ""
+    ssl_client_key: str = ""
 
 
 class DB2Credentials(BaseModel):

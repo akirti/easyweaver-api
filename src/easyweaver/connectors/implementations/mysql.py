@@ -1,3 +1,6 @@
+import base64
+import ssl
+import tempfile
 import time
 from typing import Any
 
@@ -14,6 +17,7 @@ class MySQLConnector(BaseConnector):
         super().__init__(credentials)
         self._pool: aiomysql.Pool | None = None
         self._column_types: dict[str, dict[str, str]] = {}
+        self._temp_files: list[str] = []
 
     @staticmethod
     def _qualified_table_name(table: str) -> str:
@@ -23,17 +27,91 @@ class MySQLConnector(BaseConnector):
             return f'`{schema}`.`{tbl}`'
         return f'`{table}`'
 
-    async def connect(self) -> None:
+    def _build_ssl_context(self) -> ssl.SSLContext | None:
+        """Build SSL context from credentials if SSL is configured."""
         c = self.credentials
+        ssl_mode = c.get("ssl_mode", "disable")
+
+        if ssl_mode == "disable":
+            return None
+
+        # For 'require' without certs, enable SSL without verification
+        if ssl_mode == "require" and not c.get("ssl_ca_cert"):
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            return ctx
+
+        # For verify-ca / verify-full or when certs are provided
+        ctx = ssl.create_default_context()
+
+        if ssl_mode == "verify-full":
+            ctx.check_hostname = True
+            ctx.verify_mode = ssl.CERT_REQUIRED
+        elif ssl_mode == "verify-ca":
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_REQUIRED
+        else:
+            # prefer / require with certs
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+        # Write base64-encoded certificates to temp files
+        if c.get("ssl_ca_cert"):
+            ca_path = self._write_temp_cert(c["ssl_ca_cert"])
+            ctx.load_verify_locations(ca_path)
+            if ssl_mode in ("verify-ca", "verify-full"):
+                ctx.verify_mode = ssl.CERT_REQUIRED
+
+        if c.get("ssl_client_cert") and c.get("ssl_client_key"):
+            cert_path = self._write_temp_cert(c["ssl_client_cert"])
+            key_path = self._write_temp_cert(c["ssl_client_key"])
+            ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+        elif c.get("ssl_client_cert"):
+            cert_path = self._write_temp_cert(c["ssl_client_cert"])
+            ctx.load_cert_chain(certfile=cert_path)
+
+        return ctx
+
+    def _write_temp_cert(self, b64_content: str) -> str:
+        """Decode base64 cert content and write to a temp file."""
+        content = base64.b64decode(b64_content)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+        tmp.write(content)
+        tmp.close()
+        self._temp_files.append(tmp.name)
+        return tmp.name
+
+    def _cleanup_temp_files(self) -> None:
+        import os
+        for path in self._temp_files:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        self._temp_files.clear()
+
+    def _pool_kwargs(self) -> dict[str, Any]:
+        """Build common pool kwargs including SSL if configured."""
+        c = self.credentials
+        kwargs: dict[str, Any] = {
+            "host": c["host"],
+            "port": c.get("port", 3306),
+            "user": c["user"],
+            "password": c["password"],
+            "db": c["database"],
+            "autocommit": True,
+        }
+        ssl_ctx = self._build_ssl_context()
+        if ssl_ctx is not None:
+            kwargs["ssl"] = ssl_ctx
+        return kwargs
+
+    async def connect(self) -> None:
         self._pool = await aiomysql.create_pool(
-            host=c["host"],
-            port=c.get("port", 3306),
-            user=c["user"],
-            password=c["password"],
-            db=c["database"],
+            **self._pool_kwargs(),
             minsize=1,
             maxsize=5,
-            autocommit=True,
         )
 
     async def disconnect(self) -> None:
@@ -41,29 +119,26 @@ class MySQLConnector(BaseConnector):
             self._pool.close()
             await self._pool.wait_closed()
             self._pool = None
+        self._cleanup_temp_files()
 
     async def test_connection(self) -> dict[str, Any]:
-        c = self.credentials
         start = time.monotonic()
         try:
             pool = await aiomysql.create_pool(
-                host=c["host"],
-                port=c.get("port", 3306),
-                user=c["user"],
-                password=c["password"],
-                db=c["database"],
+                **self._pool_kwargs(),
                 minsize=1,
                 maxsize=1,
-                autocommit=True,
             )
             async with pool.acquire() as conn:
                 async with conn.cursor() as cur:
                     await cur.execute("SELECT 1")
             pool.close()
             await pool.wait_closed()
+            self._cleanup_temp_files()
             latency = round((time.monotonic() - start) * 1000, 1)
             return {"success": True, "latency_ms": latency, "message": "Connection successful"}
         except Exception as e:
+            self._cleanup_temp_files()
             return {"success": False, "latency_ms": None, "message": str(e)}
 
     async def get_schema(self) -> list[dict[str, Any]]:

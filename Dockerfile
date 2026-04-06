@@ -11,14 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir poetry && poetry config virtualenvs.create false
 
 COPY pyproject.toml poetry.lock ./
-RUN poetry install --only main --no-interaction --no-ansi --no-root
+RUN poetry install --only main --extras db2 --no-interaction --no-ansi --no-root
 
 COPY alembic.ini ./
 COPY alembic/ ./alembic/
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 
-RUN poetry install --only main --no-interaction --no-ansi
+RUN poetry install --only main --extras db2 --no-interaction --no-ansi
 
 EXPOSE 8001
 
