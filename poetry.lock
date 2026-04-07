@@ -1369,9 +1369,10 @@ zstd = ["zstandard (>=0.18.0)"]
 name = "ibm-db"
 version = "3.2.8"
 description = "Python DBI driver for DB2 (LUW, zOS, i5)"
-optional = false
+optional = true
 python-versions = "*"
 groups = ["main"]
+markers = "extra == \"db2\""
 files = [
     {file = "ibm_db-3.2.8-cp310-cp310-macosx_10_15_x86_64.whl", hash = "sha256:7fac04f4a5c57b5b8a7ba7b858a784086daf60645bbb756231ec02aa342c4aaf"},
     {file = "ibm_db-3.2.8-cp310-cp310-macosx_14_0_arm64.whl", hash = "sha256:3b48b7834d38e1a68991904f3b28c9ab6b54d0b71f2b57edaad823a27e5250fa"},
@@ -3075,7 +3076,10 @@ build = ["twine", "wheel"]
 docs = ["sphinx"]
 test = ["pytest", "pytest-cov"]
 
+[extras]
+db2 = ["ibm-db"]
+
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "395ba61361260a7cce15c58b7c3a58ab1b26aefb766e5fd2b64441c78c8a6e9a"
+content-hash = "59396e303cfdf3fcd1b9e97f85d74354517017b95043fb81d1f06ef6811836b7"
