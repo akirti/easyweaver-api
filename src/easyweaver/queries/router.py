@@ -80,6 +80,11 @@ async def _execute_inline(run_id: str, request: QueryRequest):
                 _run_query(), timeout=settings.query_timeout_seconds
             )
 
+            # Apply transforms (cast, strip zeros, etc.) before sort
+            if request.transforms:
+                from easyweaver.queries.operations.transform import apply_transforms
+                df = apply_transforms(df, [t.model_dump() for t in request.transforms])
+
             # Apply sort
             if request.sort:
                 df = apply_sort(df, [s.model_dump() for s in request.sort])
