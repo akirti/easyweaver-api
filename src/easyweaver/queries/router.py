@@ -80,6 +80,27 @@ async def _execute_inline(run_id: str, request: QueryRequest):
                 _run_query(), timeout=settings.query_timeout_seconds
             )
 
+            # Resolve data bindings
+            if request.bindings:
+                from easyweaver.queries.operations.binding import (
+                    resolve_distinct_bindings,
+                    resolve_row_pair_bindings,
+                    apply_row_pair_filter,
+                )
+                from easyweaver.queries.operations.filter import apply_filters
+
+                distinct_filters = await resolve_distinct_bindings(
+                    store, [b.model_dump() for b in request.bindings]
+                )
+                if distinct_filters:
+                    df = apply_filters(df, distinct_filters, "and")
+
+                pair_df = await resolve_row_pair_bindings(
+                    store, [b.model_dump() for b in request.bindings]
+                )
+                if pair_df is not None:
+                    df = apply_row_pair_filter(df, pair_df)
+
             # Apply transforms (cast, strip zeros, etc.) before sort
             if request.transforms:
                 from easyweaver.queries.operations.transform import apply_transforms
@@ -250,6 +271,25 @@ async def _execute_join_results_inline(run_id: str, request: JoinResultsRequest)
                     df = apply_filters(
                         df, [f.model_dump() for f in request.filters], request.filter_logic
                     )
+
+                if request.bindings:
+                    from easyweaver.queries.operations.binding import (
+                        resolve_distinct_bindings,
+                        resolve_row_pair_bindings,
+                        apply_row_pair_filter,
+                    )
+
+                    distinct_filters = await resolve_distinct_bindings(
+                        store, [b.model_dump() for b in request.bindings]
+                    )
+                    if distinct_filters:
+                        df = apply_filters(df, distinct_filters, "and")
+
+                    pair_df = await resolve_row_pair_bindings(
+                        store, [b.model_dump() for b in request.bindings]
+                    )
+                    if pair_df is not None:
+                        df = apply_row_pair_filter(df, pair_df)
 
                 if request.group_by:
                     df = apply_group_by(df, request.group_by.model_dump())

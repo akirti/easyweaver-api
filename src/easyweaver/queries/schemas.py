@@ -73,6 +73,23 @@ class TransformSpec(BaseModel):
         return self
 
 
+class BindingMapping(BaseModel):
+    source_column: str
+    target_column: str
+
+
+class DataBindingSpec(BaseModel):
+    source_run_id: uuid.UUID
+    mode: Literal["distinct", "row_pair"]
+    mappings: list[BindingMapping]
+
+    @model_validator(mode="after")
+    def check_mappings(self):
+        if len(self.mappings) == 0:
+            raise ValueError("At least one mapping is required")
+        return self
+
+
 class DerivedColumnSpec(BaseModel):
     name: str
     expression_type: Literal["concat", "math", "date_part", "conditional", "literal"]
@@ -149,6 +166,7 @@ class QueryRequest(BaseModel):
     join: JoinConfig | None = None
     sort: list[SortSpec] = Field(default_factory=list)
     transforms: list[TransformSpec] = Field(default_factory=list)
+    bindings: list[DataBindingSpec] = Field(default_factory=list)
     page: int = 1
     page_size: int = 50
 
@@ -166,6 +184,7 @@ class JoinResultsRequest(BaseModel):
     distinct: DistinctSpec | None = None
     sort: list[SortSpec] = Field(default_factory=list)
     transforms: list[TransformSpec] = Field(default_factory=list)
+    bindings: list[DataBindingSpec] = Field(default_factory=list)
 
 
 class QueryRunResponse(BaseModel):
