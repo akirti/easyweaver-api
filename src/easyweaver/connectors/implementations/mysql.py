@@ -17,7 +17,12 @@ class MySQLConnector(BaseConnector):
         super().__init__(credentials)
         self._pool: aiomysql.Pool | None = None
         self._column_types: dict[str, dict[str, str]] = {}
+        self._pk_cache: dict[str, str] = {}  # table -> primary key column
         self._temp_files: list[str] = []
+
+    @property
+    def supports_batching(self) -> bool:
+        return True
 
     @staticmethod
     def _qualified_table_name(table: str) -> str:
@@ -254,6 +259,70 @@ class MySQLConnector(BaseConnector):
             return bool(value)
         return value
 
+    def _build_where_clause(
+        self, filters: list[dict], col_types: dict, filter_logic: str
+    ) -> tuple[str, list[Any]]:
+        """Build WHERE clause. MySQL uses %s placeholders."""
+        if not filters:
+            return "", []
+        clauses: list[str] = []
+        params: list[Any] = []
+        for f in filters:
+            op = f["operator"]
+            col_name = f["column"]
+            mysql_type = col_types.get(col_name, "varchar")
+            if op == "eq":
+                clauses.append(f"`{col_name}` = %s")
+                params.append(self._coerce_value(f["value"], mysql_type))
+            elif op == "neq":
+                clauses.append(f"`{col_name}` != %s")
+                params.append(self._coerce_value(f["value"], mysql_type))
+            elif op == "gt":
+                clauses.append(f"`{col_name}` > %s")
+                params.append(self._coerce_value(f["value"], mysql_type))
+            elif op == "lt":
+                clauses.append(f"`{col_name}` < %s")
+                params.append(self._coerce_value(f["value"], mysql_type))
+            elif op == "gte":
+                clauses.append(f"`{col_name}` >= %s")
+                params.append(self._coerce_value(f["value"], mysql_type))
+            elif op == "lte":
+                clauses.append(f"`{col_name}` <= %s")
+                params.append(self._coerce_value(f["value"], mysql_type))
+            elif op == "like":
+                clauses.append(f"`{col_name}` LIKE %s")
+                params.append(f"%{f['value']}%")
+            elif op == "is_null":
+                clauses.append(f"`{col_name}` IS NULL")
+            elif op == "is_not_null":
+                clauses.append(f"`{col_name}` IS NOT NULL")
+            elif op == "in":
+                values = f.get("value", [])
+                if not values:
+                    clauses.append("FALSE")
+                else:
+                    coerced = [self._coerce_value(v, mysql_type) for v in values]
+                    placeholders = ", ".join("%s" for _ in coerced)
+                    clauses.append(f"`{col_name}` IN ({placeholders})")
+                    params.extend(coerced)
+            elif op == "not_in":
+                values = f.get("value", [])
+                if not values:
+                    clauses.append("TRUE")
+                else:
+                    coerced = [self._coerce_value(v, mysql_type) for v in values]
+                    placeholders = ", ".join("%s" for _ in coerced)
+                    clauses.append(f"`{col_name}` NOT IN ({placeholders})")
+                    params.extend(coerced)
+            elif op == "between":
+                clauses.append(f"`{col_name}` BETWEEN %s AND %s")
+                params.append(self._coerce_value(f["value"], mysql_type))
+                params.append(self._coerce_value(f["value2"], mysql_type))
+        if clauses:
+            joiner = " OR " if filter_logic == "or" else " AND "
+            return " WHERE " + joiner.join(clauses), params
+        return "", []
+
     async def execute_query(
         self,
         table: str,
@@ -270,64 +339,11 @@ class MySQLConnector(BaseConnector):
         col_clause = ", ".join(f"`{c}`" for c in columns) if columns else "*"
         sql_table = self._qualified_table_name(table)
         query = f"SELECT {col_clause} FROM {sql_table}"
-        params: list[Any] = []
 
-        if filters:
-            clauses = []
-            for f in filters:
-                op = f["operator"]
-                col_name = f["column"]
-                mysql_type = col_types.get(col_name, "varchar")
-                if op == "eq":
-                    clauses.append(f"`{col_name}` = %s")
-                    params.append(self._coerce_value(f["value"], mysql_type))
-                elif op == "neq":
-                    clauses.append(f"`{col_name}` != %s")
-                    params.append(self._coerce_value(f["value"], mysql_type))
-                elif op == "gt":
-                    clauses.append(f"`{col_name}` > %s")
-                    params.append(self._coerce_value(f["value"], mysql_type))
-                elif op == "lt":
-                    clauses.append(f"`{col_name}` < %s")
-                    params.append(self._coerce_value(f["value"], mysql_type))
-                elif op == "gte":
-                    clauses.append(f"`{col_name}` >= %s")
-                    params.append(self._coerce_value(f["value"], mysql_type))
-                elif op == "lte":
-                    clauses.append(f"`{col_name}` <= %s")
-                    params.append(self._coerce_value(f["value"], mysql_type))
-                elif op == "like":
-                    clauses.append(f"`{col_name}` LIKE %s")
-                    params.append(f"%{f['value']}%")
-                elif op == "is_null":
-                    clauses.append(f"`{col_name}` IS NULL")
-                elif op == "is_not_null":
-                    clauses.append(f"`{col_name}` IS NOT NULL")
-                elif op == "in":
-                    values = f.get("value", [])
-                    if not values:
-                        clauses.append("FALSE")
-                    else:
-                        coerced = [self._coerce_value(v, mysql_type) for v in values]
-                        placeholders = ", ".join("%s" for _ in coerced)
-                        clauses.append(f"`{col_name}` IN ({placeholders})")
-                        params.extend(coerced)
-                elif op == "not_in":
-                    values = f.get("value", [])
-                    if not values:
-                        clauses.append("TRUE")
-                    else:
-                        coerced = [self._coerce_value(v, mysql_type) for v in values]
-                        placeholders = ", ".join("%s" for _ in coerced)
-                        clauses.append(f"`{col_name}` NOT IN ({placeholders})")
-                        params.extend(coerced)
-                elif op == "between":
-                    clauses.append(f"`{col_name}` BETWEEN %s AND %s")
-                    params.append(self._coerce_value(f["value"], mysql_type))
-                    params.append(self._coerce_value(f["value2"], mysql_type))
-            if clauses:
-                joiner = " OR " if filter_logic == "or" else " AND "
-                query += " WHERE " + joiner.join(clauses)
+        where_clause, params = self._build_where_clause(
+            filters or [], col_types, filter_logic
+        )
+        query += where_clause
 
         if sort:
             order_parts = []
@@ -344,3 +360,88 @@ class MySQLConnector(BaseConnector):
                 await cur.execute(query, tuple(params) if params else None)
                 rows = await cur.fetchall()
                 return [dict(r) for r in rows]
+
+    async def _get_primary_key(self, table: str) -> str:
+        """Detect the primary key column for a table (cached).
+
+        Falls back to the first column if no PK is found.
+        """
+        if table in self._pk_cache:
+            return self._pk_cache[table]
+        assert self._pool
+        if '.' in table:
+            _db, tbl = table.split('.', 1)
+        else:
+            tbl = table
+        async with self._pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(
+                    f"SHOW KEYS FROM {self._qualified_table_name(table)} WHERE Key_name = 'PRIMARY'"
+                )
+                rows = await cur.fetchall()
+        if rows:
+            pk = rows[0]["Column_name"]
+        else:
+            # Fall back to first column
+            async with self._pool.acquire() as conn:
+                async with conn.cursor(aiomysql.DictCursor) as cur:
+                    await cur.execute(
+                        f"SHOW COLUMNS FROM {self._qualified_table_name(table)}"
+                    )
+                    cols = await cur.fetchall()
+            pk = cols[0]["Field"] if cols else "id"
+        self._pk_cache[table] = pk
+        return pk
+
+    async def execute_query_batched(
+        self,
+        table: str,
+        columns: list[str] | None = None,
+        filters: list[dict] | None = None,
+        filter_logic: str = "and",
+        batch_size: int = 10_000,
+        offset: int = 0,
+        last_key: Any = None,
+    ) -> tuple[list[dict[str, Any]], bool, Any]:
+        assert self._pool
+
+        pk = await self._get_primary_key(table)
+        col_types = await self._get_column_types(table) if filters else {}
+
+        col_clause = ", ".join(f"`{c}`" for c in columns) if columns else "*"
+        sql_table = self._qualified_table_name(table)
+        query = f"SELECT {col_clause} FROM {sql_table}"
+
+        where_clause, params = self._build_where_clause(
+            filters or [], col_types, filter_logic
+        )
+
+        # Keyset pagination: when last_key is provided, add pk > last_key
+        if last_key is not None:
+            pk_condition = f"`{pk}` > %s"
+            params.append(last_key)
+            if where_clause:
+                query += where_clause + f" AND {pk_condition}"
+            else:
+                query += f" WHERE {pk_condition}"
+        else:
+            query += where_clause
+
+        query += f" ORDER BY `{pk}` LIMIT {int(batch_size) + 1}"
+
+        # Fall back to OFFSET when no keyset key and offset > 0
+        if last_key is None and offset > 0:
+            query += f" OFFSET {int(offset)}"
+
+        async with self._pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(query, tuple(params) if params else None)
+                rows = await cur.fetchall()
+
+        result = [dict(r) for r in rows]
+        if len(result) > batch_size:
+            result = result[:batch_size]
+            last_pk = result[-1][pk] if result else None
+            return result, True, last_pk
+        last_pk = result[-1][pk] if result else None
+        return result, False, last_pk

@@ -3,7 +3,7 @@ import copy
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, WebSocket
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from easyweaver.dependencies import get_db, get_redis
@@ -59,6 +59,8 @@ def _run_to_response(run) -> dict:
         "error": run.error,
         "result_gcp_path": run.result_gcp_path,
         "result_run_id": run.result_run_id,
+        "progress": run.progress,
+        "control": run.control,
         "created_at": run.created_at,
         "updated_at": run.updated_at,
     }
@@ -141,6 +143,56 @@ async def save_results_to_gcp(
     return {"gcp_path": gcp_path}
 
 
+@router.get("/runs/{run_id}/preview/{dataset_key:path}")
+async def preview_dataset(
+    run_id: str,
+    dataset_key: str,
+    page_size: int = 100,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Return a preview of intermediate cached data for a dataset during a run.
+
+    Reads from the Redis key ``ew:batch:{run_id}:{dataset_key}`` which stores
+    the intermediate Parquet-encoded DataFrame produced by the batched fetch.
+    """
+    import io
+
+    import polars as pl
+    from redis.asyncio import Redis
+
+    from easyweaver.settings import settings
+
+    # Verify the run exists
+    await service.get_process_run(db, run_id)
+
+    redis_key = f"ew:batch:{run_id}:{dataset_key}"
+
+    # Use raw (non-decoded) redis to read binary parquet data
+    raw_redis = Redis.from_url(settings.redis_url, decode_responses=False)
+    try:
+        data = await raw_redis.get(redis_key)
+    finally:
+        await raw_redis.aclose()
+
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"No cached data for dataset '{dataset_key}'")
+
+    df = pl.read_parquet(io.BytesIO(data))
+    rows = df.head(page_size).to_dicts()
+    columns = [{"name": c, "type": str(df.schema[c])} for c in df.columns]
+    total = len(df)
+    total_pages = (total + page_size - 1) // page_size
+
+    return QueryResultsResponse(
+        columns=columns,
+        rows=rows,
+        total=total,
+        page=1,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
+
+
 @router.post("/runs/{run_id}/reload")
 async def reload_results_from_gcp(
     run_id: str,
@@ -210,12 +262,51 @@ async def delete_configuration(
     await service.delete_configuration(db, config_id)
 
 
+@router.websocket("/{config_id}/run/ws")
+async def run_process_ws(
+    websocket: WebSocket,
+    config_id: str,
+    token: str | None = None,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """WebSocket endpoint for real-time process execution with progress updates.
+
+    Requires a valid JWT token passed as a ``token`` query parameter.
+    Supports both EasyWeaver-native and admin-panel bridge tokens.
+    """
+    from easyweaver.auth.service import decode_token
+    from easyweaver.core.exceptions import AuthenticationError
+    from easyweaver.processes.ws_handler import ProcessWebSocketHandler
+
+    # Validate token before accepting the connection
+    if not token:
+        await websocket.close(code=4003, reason="Forbidden: token required")
+        return
+
+    try:
+        decode_token(token)
+    except (AuthenticationError, Exception):
+        await websocket.close(code=4003, reason="Forbidden: invalid token")
+        return
+
+    handler = ProcessWebSocketHandler(websocket, config_id, db)
+    await handler.handle()
+
+
 @router.post("/{config_id}/run", response_model=ProcessRunResponse, status_code=202)
 async def run_process(
     config_id: str,
     request: ProcessRunRequest,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
+    from easyweaver.settings import settings
+
+    if request.max_rows > settings.max_result_rows:
+        raise HTTPException(
+            status_code=422,
+            detail=f"max_rows ({request.max_rows}) exceeds system limit ({settings.max_result_rows})",
+        )
+
     config = await service.get_configuration(db, config_id)
     run = await service.create_process_run(
         db, process_id=str(config.id), user_id="system", param_values=request.param_values
@@ -227,6 +318,7 @@ async def run_process(
             request.param_values,
             request.save_results_to_gcp,
             config_source=request.config_source,
+            max_rows=request.max_rows,
         )
     )
     return _run_to_response(run)
@@ -262,6 +354,7 @@ async def _execute_process_inline(
     param_values: dict,
     save_to_gcp: bool,
     config_source: str = "auto",
+    max_rows: int = 1000,
 ):
     """Execute a process in the background.
 
@@ -322,9 +415,10 @@ async def _execute_process_inline(
                 timeout=settings.query_timeout_seconds,
             )
 
-            # Enforce row limit
-            if len(df) > settings.max_result_rows:
-                df = df.head(settings.max_result_rows)
+            # Enforce row limit (user-requested max_rows, capped by system limit)
+            effective_limit = min(max_rows, settings.max_result_rows)
+            if len(df) > effective_limit:
+                df = df.head(effective_limit)
 
             # Store in Redis
             result_run_id = str(uuid.uuid4())

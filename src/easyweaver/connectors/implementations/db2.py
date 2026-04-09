@@ -29,6 +29,11 @@ class DB2Connector(BaseConnector):
         super().__init__(credentials)
         self._conn: Any = None
         self._column_types: dict[str, dict[str, str]] = {}
+        self._pk_cache: dict[str, str] = {}  # table -> primary key column
+
+    @property
+    def supports_batching(self) -> bool:
+        return True
 
     @staticmethod
     def _qualified_table_name(table: str) -> str:
@@ -206,6 +211,70 @@ class DB2Connector(BaseConnector):
             return bool(value)
         return value
 
+    def _build_where_clause(
+        self, filters: list[dict], col_types: dict, filter_logic: str, col_prefix: str = ""
+    ) -> tuple[str, list[Any]]:
+        """Build WHERE clause. DB2 uses ? placeholders. col_prefix is 't.' for batched queries."""
+        if not filters:
+            return "", []
+        clauses: list[str] = []
+        params: list[Any] = []
+        for f in filters:
+            op = f["operator"]
+            col_name = f["column"]
+            db2_type = col_types.get(col_name, "varchar")
+            if op == "eq":
+                clauses.append(f'{col_prefix}"{col_name}" = ?')
+                params.append(self._coerce_value(f["value"], db2_type))
+            elif op == "neq":
+                clauses.append(f'{col_prefix}"{col_name}" != ?')
+                params.append(self._coerce_value(f["value"], db2_type))
+            elif op == "gt":
+                clauses.append(f'{col_prefix}"{col_name}" > ?')
+                params.append(self._coerce_value(f["value"], db2_type))
+            elif op == "lt":
+                clauses.append(f'{col_prefix}"{col_name}" < ?')
+                params.append(self._coerce_value(f["value"], db2_type))
+            elif op == "gte":
+                clauses.append(f'{col_prefix}"{col_name}" >= ?')
+                params.append(self._coerce_value(f["value"], db2_type))
+            elif op == "lte":
+                clauses.append(f'{col_prefix}"{col_name}" <= ?')
+                params.append(self._coerce_value(f["value"], db2_type))
+            elif op == "like":
+                clauses.append(f'{col_prefix}"{col_name}" LIKE ?')
+                params.append(f"%{f['value']}%")
+            elif op == "is_null":
+                clauses.append(f'{col_prefix}"{col_name}" IS NULL')
+            elif op == "is_not_null":
+                clauses.append(f'{col_prefix}"{col_name}" IS NOT NULL')
+            elif op == "in":
+                values = f.get("value", [])
+                if not values:
+                    clauses.append("1=0")
+                else:
+                    coerced = [self._coerce_value(v, db2_type) for v in values]
+                    placeholders = ", ".join("?" for _ in coerced)
+                    clauses.append(f'{col_prefix}"{col_name}" IN ({placeholders})')
+                    params.extend(coerced)
+            elif op == "not_in":
+                values = f.get("value", [])
+                if not values:
+                    clauses.append("1=1")
+                else:
+                    coerced = [self._coerce_value(v, db2_type) for v in values]
+                    placeholders = ", ".join("?" for _ in coerced)
+                    clauses.append(f'{col_prefix}"{col_name}" NOT IN ({placeholders})')
+                    params.extend(coerced)
+            elif op == "between":
+                clauses.append(f'{col_prefix}"{col_name}" BETWEEN ? AND ?')
+                params.append(self._coerce_value(f["value"], db2_type))
+                params.append(self._coerce_value(f["value2"], db2_type))
+        if clauses:
+            joiner = " OR " if filter_logic == "or" else " AND "
+            return " WHERE " + joiner.join(clauses), params
+        return "", []
+
     async def execute_query(
         self,
         table: str,
@@ -222,64 +291,11 @@ class DB2Connector(BaseConnector):
         col_clause = ", ".join(f'"{c}"' for c in columns) if columns else "*"
         sql_table = self._qualified_table_name(table)
         query = f'SELECT {col_clause} FROM {sql_table}'
-        params: list[Any] = []
 
-        if filters:
-            clauses = []
-            for f in filters:
-                op = f["operator"]
-                col_name = f["column"]
-                db2_type = col_types.get(col_name, "varchar")
-                if op == "eq":
-                    clauses.append(f'"{col_name}" = ?')
-                    params.append(self._coerce_value(f["value"], db2_type))
-                elif op == "neq":
-                    clauses.append(f'"{col_name}" != ?')
-                    params.append(self._coerce_value(f["value"], db2_type))
-                elif op == "gt":
-                    clauses.append(f'"{col_name}" > ?')
-                    params.append(self._coerce_value(f["value"], db2_type))
-                elif op == "lt":
-                    clauses.append(f'"{col_name}" < ?')
-                    params.append(self._coerce_value(f["value"], db2_type))
-                elif op == "gte":
-                    clauses.append(f'"{col_name}" >= ?')
-                    params.append(self._coerce_value(f["value"], db2_type))
-                elif op == "lte":
-                    clauses.append(f'"{col_name}" <= ?')
-                    params.append(self._coerce_value(f["value"], db2_type))
-                elif op == "like":
-                    clauses.append(f'"{col_name}" LIKE ?')
-                    params.append(f"%{f['value']}%")
-                elif op == "is_null":
-                    clauses.append(f'"{col_name}" IS NULL')
-                elif op == "is_not_null":
-                    clauses.append(f'"{col_name}" IS NOT NULL')
-                elif op == "in":
-                    values = f.get("value", [])
-                    if not values:
-                        clauses.append("1=0")
-                    else:
-                        coerced = [self._coerce_value(v, db2_type) for v in values]
-                        placeholders = ", ".join("?" for _ in coerced)
-                        clauses.append(f'"{col_name}" IN ({placeholders})')
-                        params.extend(coerced)
-                elif op == "not_in":
-                    values = f.get("value", [])
-                    if not values:
-                        clauses.append("1=1")
-                    else:
-                        coerced = [self._coerce_value(v, db2_type) for v in values]
-                        placeholders = ", ".join("?" for _ in coerced)
-                        clauses.append(f'"{col_name}" NOT IN ({placeholders})')
-                        params.extend(coerced)
-                elif op == "between":
-                    clauses.append(f'"{col_name}" BETWEEN ? AND ?')
-                    params.append(self._coerce_value(f["value"], db2_type))
-                    params.append(self._coerce_value(f["value2"], db2_type))
-            if clauses:
-                joiner = " OR " if filter_logic == "or" else " AND "
-                query += " WHERE " + joiner.join(clauses)
+        where_clause, params = self._build_where_clause(
+            filters or [], col_types, filter_logic
+        )
+        query += where_clause
 
         if sort:
             order_parts = []
@@ -300,3 +316,117 @@ class DB2Connector(BaseConnector):
             return [dict(zip(cols, row)) for row in rows]
 
         return await asyncio.to_thread(_execute)
+
+    async def _get_primary_key(self, table: str) -> str:
+        """Detect the primary key column for a table (cached).
+
+        Falls back to the first column if no PK is found.
+        """
+        if table in self._pk_cache:
+            return self._pk_cache[table]
+        assert self._conn
+
+        if '.' in table:
+            schema, tbl = table.split('.', 1)
+        else:
+            schema, tbl = None, table
+
+        def _fetch_pk() -> str | None:
+            cursor = self._conn.cursor()
+            if schema is not None:
+                cursor.execute(
+                    "SELECT COLNAME FROM SYSCAT.KEYCOLUSE "
+                    "WHERE TABSCHEMA = ? AND TABNAME = ? "
+                    "ORDER BY COLSEQ FETCH FIRST 1 ROWS ONLY",
+                    (schema, tbl),
+                )
+            else:
+                cursor.execute(
+                    "SELECT COLNAME FROM SYSCAT.KEYCOLUSE "
+                    "WHERE TABSCHEMA = CURRENT SCHEMA AND TABNAME = ? "
+                    "ORDER BY COLSEQ FETCH FIRST 1 ROWS ONLY",
+                    (tbl,),
+                )
+            row = cursor.fetchone()
+            cursor.close()
+            return row[0].strip() if row else None
+
+        pk = await asyncio.to_thread(_fetch_pk)
+        if pk is None:
+            # Fall back to first column
+            def _fetch_first_col() -> str:
+                cursor = self._conn.cursor()
+                if schema is not None:
+                    cursor.execute(
+                        "SELECT COLNAME FROM SYSCAT.COLUMNS "
+                        "WHERE TABSCHEMA = ? AND TABNAME = ? "
+                        "ORDER BY COLNO FETCH FIRST 1 ROWS ONLY",
+                        (schema, tbl),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT COLNAME FROM SYSCAT.COLUMNS "
+                        "WHERE TABSCHEMA = CURRENT SCHEMA AND TABNAME = ? "
+                        "ORDER BY COLNO FETCH FIRST 1 ROWS ONLY",
+                        (tbl,),
+                    )
+                row = cursor.fetchone()
+                cursor.close()
+                return row[0].strip() if row else "ID"
+
+            pk = await asyncio.to_thread(_fetch_first_col)
+        self._pk_cache[table] = pk
+        return pk
+
+    async def execute_query_batched(
+        self,
+        table: str,
+        columns: list[str] | None = None,
+        filters: list[dict] | None = None,
+        filter_logic: str = "and",
+        batch_size: int = 10_000,
+        offset: int = 0,
+        last_key: Any = None,
+    ) -> tuple[list[dict[str, Any]], bool, Any]:
+        assert self._conn
+
+        pk = await self._get_primary_key(table)
+        col_types = await self._get_column_types(table) if filters else {}
+
+        col_clause = ", ".join(f't."{c}"' for c in columns) if columns else "t.*"
+        sql_table = self._qualified_table_name(table)
+
+        where_clause, params = self._build_where_clause(
+            filters or [], col_types, filter_logic, col_prefix="t."
+        )
+
+        # Use ROW_NUMBER() for portable OFFSET/LIMIT pagination
+        fetch_limit = int(batch_size) + 1
+        rn_lower = int(offset) + 1
+        rn_upper = int(offset) + fetch_limit
+        query = (
+            f"SELECT * FROM ("
+            f'SELECT {col_clause}, ROW_NUMBER() OVER(ORDER BY t."{pk}") AS rn__ '
+            f"FROM {sql_table} t{where_clause}"
+            f") WHERE rn__ >= {rn_lower} AND rn__ <= {rn_upper}"
+        )
+
+        def _execute() -> list[dict[str, Any]]:
+            cursor = self._conn.cursor()
+            cursor.execute(query, tuple(params) if params else None)
+            cols = [desc[0].strip() for desc in cursor.description]
+            rows = cursor.fetchall()
+            cursor.close()
+            # Remove the rn__ helper column from results
+            return [
+                {k: v for k, v in zip(cols, row) if k != "rn__"}
+                for row in rows
+            ]
+
+        result = await asyncio.to_thread(_execute)
+        if len(result) > batch_size:
+            result = result[:batch_size]
+            last_pk = result[-1].get(pk) if result else None
+            return result, True, last_pk
+        last_pk = result[-1].get(pk) if result else None
+        return result, False, last_pk

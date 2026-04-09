@@ -21,12 +21,24 @@ class ProcessFilterConfig(BaseModel):
     value2: Any = None
 
 
+class BindingMapping(BaseModel):
+    source_column: str
+    target_column: str
+
+
+class ProcessQueryBinding(BaseModel):
+    source_dataset: str  # e.g., "schema1.orders"
+    mode: Literal["distinct", "row_pair"]
+    mappings: list[BindingMapping]
+
+
 class ProcessQueryConfig(BaseModel):
     source_id: str
     table: str
     columns: list[str] | None = None
     filters: list[ProcessFilterConfig] = Field(default_factory=list)
     filter_logic: Literal["and", "or"] = "and"
+    bindings: list[ProcessQueryBinding] = Field(default_factory=list)
     # Embedded source details for self-sufficient configs (v2+)
     source_name: str | None = None
     source_type: str | None = None
@@ -109,6 +121,7 @@ class ProcessConfigurationResponse(BaseModel):
 
 class ProcessRunRequest(BaseModel):
     param_values: dict[str, Any] = Field(default_factory=dict)
+    max_rows: int = Field(default=1000, gt=0, description="Maximum rows to return (mandatory, must be ≤ system max_result_rows)")
     save_results_to_gcp: bool = False
     config_source: Literal["auto", "mongodb", "gcp"] = "auto"
 
@@ -122,6 +135,8 @@ class ProcessRunResponse(BaseModel):
     error: str | None = None
     result_gcp_path: str = ""
     result_run_id: str = ""
+    progress: dict | None = None  # Progress state (phases, datasets, operations)
+    control: dict | None = None   # Control state (paused, batch_size_override, etc.)
     created_at: datetime
     updated_at: datetime
 

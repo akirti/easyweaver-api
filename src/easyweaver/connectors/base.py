@@ -44,6 +44,58 @@ class BaseConnector(ABC):
     ) -> list[dict[str, Any]]:
         """Execute a query and return rows as dicts."""
 
+    @property
+    def supports_batching(self) -> bool:
+        """Whether this connector supports batched fetching.
+
+        Connectors that support batching (SQL, MongoDB) should override
+        this to return True and implement execute_query_batched().
+        File and REST connectors return False (the default) and use
+        single-shot execute_query() instead.
+        """
+        return False
+
+    async def execute_query_batched(
+        self,
+        table: str,
+        columns: list[str] | None = None,
+        filters: list[dict] | None = None,
+        filter_logic: str = "and",
+        batch_size: int = 10_000,
+        offset: int = 0,
+        last_key: Any = None,
+    ) -> tuple[list[dict[str, Any]], bool, Any]:
+        """Fetch a batch of rows with keyset or OFFSET/LIMIT pagination.
+
+        Uses PK-based ordering internally for stable pagination.
+        User-specified sort is applied post-fetch in Polars.
+
+        Args:
+            table: Table or collection name.
+            columns: Columns to select (None = all).
+            filters: Filter conditions.
+            filter_logic: How to combine filters ("and" / "or").
+            batch_size: Number of rows to fetch in this batch.
+            offset: Row offset for pagination.
+            last_key: Last PK value from the previous batch for keyset
+                pagination.  When provided, the connector uses
+                ``WHERE pk > last_key`` instead of OFFSET.  When *None*
+                and *offset* > 0, falls back to OFFSET pagination.
+
+        Returns:
+            Tuple of (rows, has_more, last_key_for_next_batch) where
+            *has_more* indicates whether additional rows exist beyond
+            this batch and *last_key_for_next_batch* is the PK value
+            of the last returned row (or *None* if empty).
+
+        Raises:
+            NotImplementedError: If the connector does not support batching.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support batched queries. "
+            f"Check supports_batching before calling execute_query_batched()."
+        )
+
     async def __aenter__(self):
         await self.connect()
         return self

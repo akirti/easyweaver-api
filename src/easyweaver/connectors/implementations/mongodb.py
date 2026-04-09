@@ -30,6 +30,10 @@ class MongoDBConnector(BaseConnector):
         self._client: AsyncIOMotorClient | None = None
         self._db_name = credentials.get("database", "test")
 
+    @property
+    def supports_batching(self) -> bool:
+        return True
+
     def _uri(self) -> str:
         c = self.credentials
         # If a direct connection string is provided, use it as-is
@@ -144,6 +148,47 @@ class MongoDBConnector(BaseConnector):
 
         docs = await cursor.to_list(limit or 10000)
         return self._serialize_docs(docs)
+
+    async def execute_query_batched(
+        self,
+        table: str,
+        columns: list[str] | None = None,
+        filters: list[dict] | None = None,
+        filter_logic: str = "and",
+        batch_size: int = 10_000,
+        offset: int = 0,
+        last_key: Any = None,
+    ) -> tuple[list[dict[str, Any]], bool, Any]:
+        coll = self._db[table]
+        mongo_filter = self._build_filter(filters, filter_logic) if filters else {}
+        projection = {self._col_to_mongo_path(c): 1 for c in columns} if columns else None
+
+        # Keyset pagination: when last_key is provided, add _id > last_key
+        if last_key is not None:
+            id_condition = {"_id": {"$gt": ObjectId(last_key) if isinstance(last_key, str) else last_key}}
+            if mongo_filter:
+                mongo_filter = {"$and": [mongo_filter, id_condition]}
+            else:
+                mongo_filter = id_condition
+
+        # Use _id sort for stable pagination; fetch batch_size+1 to detect has_more
+        fetch_limit = int(batch_size) + 1
+
+        if last_key is not None:
+            # Keyset mode: no skip needed
+            cursor = coll.find(mongo_filter, projection).sort("_id", 1).limit(fetch_limit)
+        else:
+            cursor = coll.find(mongo_filter, projection).sort("_id", 1).skip(int(offset)).limit(fetch_limit)
+
+        docs = await cursor.to_list(fetch_limit)
+
+        result = self._serialize_docs(docs)
+        if len(result) > batch_size:
+            result = result[:batch_size]
+            last_pk = result[-1].get("_id") if result else None
+            return result, True, last_pk
+        last_pk = result[-1].get("_id") if result else None
+        return result, False, last_pk
 
     @staticmethod
     def _col_to_mongo_path(col: str) -> str:

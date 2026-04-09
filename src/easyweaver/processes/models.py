@@ -65,6 +65,8 @@ class ProcessRun:
     error: str | None = None
     result_gcp_path: str = ""
     result_run_id: str = ""
+    progress: dict | None = None
+    control: dict | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -81,13 +83,15 @@ class ProcessRun:
             error=doc.get("error"),
             result_gcp_path=doc.get("result_gcp_path", ""),
             result_run_id=doc.get("result_run_id", ""),
+            progress=doc.get("progress"),
+            control=doc.get("control"),
             created_at=doc.get("created_at", datetime.now(timezone.utc)),
             updated_at=doc.get("updated_at", datetime.now(timezone.utc)),
         )
 
     def to_doc(self) -> dict:
         """Convert to a MongoDB document."""
-        return {
+        doc = {
             "_id": str(self.id),
             "process_id": self.process_id,
             "user_id": self.user_id,
@@ -100,3 +104,8 @@ class ProcessRun:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+        if self.progress is not None:
+            doc["progress"] = self.progress
+        if self.control is not None:
+            doc["control"] = self.control
+        return doc

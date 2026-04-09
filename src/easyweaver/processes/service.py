@@ -198,6 +198,7 @@ async def update_process_run(
     error: str | None = None,
     result_gcp_path: str | None = None,
     result_run_id: str | None = None,
+    control: dict | None = None,
 ) -> ProcessRun:
     rid = str(run_id)
     updates: dict = {"updated_at": datetime.now(timezone.utc)}
@@ -211,6 +212,8 @@ async def update_process_run(
         updates["result_gcp_path"] = result_gcp_path
     if result_run_id is not None:
         updates["result_run_id"] = result_run_id
+    if control is not None:
+        updates["control"] = control
     await db.process_runs.update_one({"_id": rid}, {"$set": updates})
     return await get_process_run(db, rid)
 

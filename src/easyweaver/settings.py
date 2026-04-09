@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "EW_", "env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_prefix": "EW_", "env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     # App
     app_name: str = "easyweaver"
@@ -53,6 +53,12 @@ class Settings(BaseSettings):
 
     # Process run limits
     max_process_runs_per_config: int = 50
+
+    # Batched fetch
+    batch_default_target_seconds: float = 10.0
+    batch_min_size: int = 1_000
+    batch_max_size: int = 100_000
+    batch_intermediate_ttl_seconds: int = 3600
 
     # GCS Storage
     gcs_bucket_name: str = ""
