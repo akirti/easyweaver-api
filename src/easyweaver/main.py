@@ -48,6 +48,10 @@ def _register_routes(app: FastAPI):
     async def health():
         return {"status": "ok"}
 
+    @app.get("/api/v1/settings")
+    async def public_settings():
+        return {"max_result_rows": settings.max_result_rows}
+
     app.include_router(sources_router, prefix="/api/v1/sources", tags=["sources"])
     app.include_router(queries_router, prefix="/api/v1/queries", tags=["queries"])
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
