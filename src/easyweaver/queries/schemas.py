@@ -167,6 +167,8 @@ class QueryRequest(BaseModel):
     sort: list[SortSpec] = Field(default_factory=list)
     transforms: list[TransformSpec] = Field(default_factory=list)
     bindings: list[DataBindingSpec] = Field(default_factory=list)
+    group_by: GroupBySpec | None = None
+    distinct: DistinctSpec | None = None
     page: int = 1
     page_size: int = 50
 

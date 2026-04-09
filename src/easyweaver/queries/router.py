@@ -106,6 +106,16 @@ async def _execute_inline(run_id: str, request: QueryRequest):
                 from easyweaver.queries.operations.transform import apply_transforms
                 df = apply_transforms(df, [t.model_dump() for t in request.transforms])
 
+            # Apply group_by
+            if request.group_by:
+                from easyweaver.queries.operations.group_by import apply_group_by
+                df = apply_group_by(df, request.group_by.model_dump())
+
+            # Apply distinct
+            if request.distinct:
+                from easyweaver.queries.operations.distinct import apply_distinct
+                df = apply_distinct(df, request.distinct.model_dump())
+
             # Apply sort
             if request.sort:
                 df = apply_sort(df, [s.model_dump() for s in request.sort])
