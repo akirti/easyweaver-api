@@ -67,7 +67,13 @@ async def resolve_cross_dataset_filters(
 async def execute_single_source(
     source: DataSource,
     config: QuerySourceConfig,
+    row_limit: int | None = None,
 ) -> pl.DataFrame:
+    from easyweaver.settings import settings
+
+    # Always enforce a row limit at the database level to prevent OOM on huge tables
+    effective_limit = row_limit or settings.max_result_rows
+
     creds = get_source_credentials(source)
     connector = get_connector(source.source_type, creds)
     async with connector:
@@ -76,6 +82,7 @@ async def execute_single_source(
             columns=config.columns,
             filters=[f.model_dump() for f in config.filters],
             filter_logic=config.filter_logic,
+            limit=effective_limit,
         )
     return pl.DataFrame(rows) if rows else pl.DataFrame()
 
