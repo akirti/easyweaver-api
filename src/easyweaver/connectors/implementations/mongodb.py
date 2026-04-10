@@ -127,9 +127,9 @@ class MongoDBConnector(BaseConnector):
     ) -> dict[str, Any]:
         coll = self._db[table]
         raw_values = await coll.distinct(column)
-        # Filter nulls, sort, slice
+        # Filter nulls, serialize ObjectIds, sort, slice
         values = sorted(
-            [v for v in raw_values if v is not None],
+            [self._make_serializable(v) for v in raw_values if v is not None],
             key=lambda x: str(x),
         )
         truncated = len(values) > limit
@@ -184,7 +184,15 @@ class MongoDBConnector(BaseConnector):
 
         # Keyset pagination: when last_key is provided, add _id > last_key
         if last_key is not None:
-            id_condition = {"_id": {"$gt": ObjectId(last_key) if isinstance(last_key, str) else last_key}}
+            # Try to convert to ObjectId if it looks like one; otherwise use raw value
+            if isinstance(last_key, str):
+                try:
+                    gt_val = ObjectId(last_key)
+                except Exception:
+                    gt_val = last_key
+            else:
+                gt_val = last_key
+            id_condition = {"_id": {"$gt": gt_val}}
             if mongo_filter:
                 mongo_filter = {"$and": [mongo_filter, id_condition]}
             else:
@@ -221,12 +229,33 @@ class MongoDBConnector(BaseConnector):
         return re.sub(r"\[\d*\]", "", col)
 
     @staticmethod
+    def _coerce_mongo_value(col: str, val: Any) -> Any:
+        """Coerce filter value for MongoDB. Converts _id strings to ObjectId when possible."""
+        if col == "_id" and isinstance(val, str):
+            try:
+                return ObjectId(val)
+            except Exception:
+                return val
+        if col == "_id" and isinstance(val, list):
+            coerced = []
+            for v in val:
+                if isinstance(v, str):
+                    try:
+                        coerced.append(ObjectId(v))
+                    except Exception:
+                        coerced.append(v)
+                else:
+                    coerced.append(v)
+            return coerced
+        return val
+
+    @staticmethod
     def _build_filter(filters: list[dict], logic: str = "and") -> dict:
         conditions = []
         for f in filters:
             col = MongoDBConnector._col_to_mongo_path(f["column"])
             op = f["operator"]
-            val = f.get("value")
+            val = MongoDBConnector._coerce_mongo_value(col, f.get("value"))
             if op == "eq":
                 conditions.append({col: val})
             elif op == "neq":
@@ -252,7 +281,7 @@ class MongoDBConnector(BaseConnector):
                 values = val if isinstance(val, list) else []
                 conditions.append({col: {"$nin": values}})
             elif op == "between":
-                val2 = f.get("value2")
+                val2 = MongoDBConnector._coerce_mongo_value(col, f.get("value2"))
                 conditions.append({col: {"$gte": val, "$lte": val2}})
         if not conditions:
             return {}
