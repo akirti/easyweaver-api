@@ -36,12 +36,17 @@ class DB2Connector(BaseConnector):
         return True
 
     @staticmethod
-    def _qualified_table_name(table: str) -> str:
+    def _quote_ident(name: str) -> str:
+        """Escape a DB2 identifier by doubling any embedded double quotes."""
+        return '"' + name.replace('"', '""') + '"'
+
+    @classmethod
+    def _qualified_table_name(cls, table: str) -> str:
         """Return a properly quoted schema.table SQL identifier."""
         if '.' in table:
             schema, tbl = table.split('.', 1)
-            return f'"{schema}"."{tbl}"'
-        return f'"{table}"'
+            return f'{cls._quote_ident(schema)}.{cls._quote_ident(tbl)}'
+        return cls._quote_ident(table)
 
     def _connection_string(self) -> str:
         c = self.credentials
@@ -224,30 +229,30 @@ class DB2Connector(BaseConnector):
             col_name = f["column"]
             db2_type = col_types.get(col_name, "varchar")
             if op == "eq":
-                clauses.append(f'{col_prefix}"{col_name}" = ?')
+                clauses.append(f'{col_prefix}{self._quote_ident(col_name)} = ?')
                 params.append(self._coerce_value(f["value"], db2_type))
             elif op == "neq":
-                clauses.append(f'{col_prefix}"{col_name}" != ?')
+                clauses.append(f'{col_prefix}{self._quote_ident(col_name)} != ?')
                 params.append(self._coerce_value(f["value"], db2_type))
             elif op == "gt":
-                clauses.append(f'{col_prefix}"{col_name}" > ?')
+                clauses.append(f'{col_prefix}{self._quote_ident(col_name)} > ?')
                 params.append(self._coerce_value(f["value"], db2_type))
             elif op == "lt":
-                clauses.append(f'{col_prefix}"{col_name}" < ?')
+                clauses.append(f'{col_prefix}{self._quote_ident(col_name)} < ?')
                 params.append(self._coerce_value(f["value"], db2_type))
             elif op == "gte":
-                clauses.append(f'{col_prefix}"{col_name}" >= ?')
+                clauses.append(f'{col_prefix}{self._quote_ident(col_name)} >= ?')
                 params.append(self._coerce_value(f["value"], db2_type))
             elif op == "lte":
-                clauses.append(f'{col_prefix}"{col_name}" <= ?')
+                clauses.append(f'{col_prefix}{self._quote_ident(col_name)} <= ?')
                 params.append(self._coerce_value(f["value"], db2_type))
             elif op == "like":
-                clauses.append(f'{col_prefix}"{col_name}" LIKE ?')
+                clauses.append(f'{col_prefix}{self._quote_ident(col_name)} LIKE ?')
                 params.append(f"%{f['value']}%")
             elif op == "is_null":
-                clauses.append(f'{col_prefix}"{col_name}" IS NULL')
+                clauses.append(f'{col_prefix}{self._quote_ident(col_name)} IS NULL')
             elif op == "is_not_null":
-                clauses.append(f'{col_prefix}"{col_name}" IS NOT NULL')
+                clauses.append(f'{col_prefix}{self._quote_ident(col_name)} IS NOT NULL')
             elif op == "in":
                 values = f.get("value", [])
                 if not values:
@@ -255,7 +260,7 @@ class DB2Connector(BaseConnector):
                 else:
                     coerced = [self._coerce_value(v, db2_type) for v in values]
                     placeholders = ", ".join("?" for _ in coerced)
-                    clauses.append(f'{col_prefix}"{col_name}" IN ({placeholders})')
+                    clauses.append(f'{col_prefix}{self._quote_ident(col_name)} IN ({placeholders})')
                     params.extend(coerced)
             elif op == "not_in":
                 values = f.get("value", [])
@@ -264,10 +269,10 @@ class DB2Connector(BaseConnector):
                 else:
                     coerced = [self._coerce_value(v, db2_type) for v in values]
                     placeholders = ", ".join("?" for _ in coerced)
-                    clauses.append(f'{col_prefix}"{col_name}" NOT IN ({placeholders})')
+                    clauses.append(f'{col_prefix}{self._quote_ident(col_name)} NOT IN ({placeholders})')
                     params.extend(coerced)
             elif op == "between":
-                clauses.append(f'{col_prefix}"{col_name}" BETWEEN ? AND ?')
+                clauses.append(f'{col_prefix}{self._quote_ident(col_name)} BETWEEN ? AND ?')
                 params.append(self._coerce_value(f["value"], db2_type))
                 params.append(self._coerce_value(f["value2"], db2_type))
         if clauses:
@@ -288,7 +293,7 @@ class DB2Connector(BaseConnector):
 
         col_types = await self._get_column_types(table) if filters else {}
 
-        col_clause = ", ".join(f'"{c}"' for c in columns) if columns else "*"
+        col_clause = ", ".join(self._quote_ident(c) for c in columns) if columns else "*"
         sql_table = self._qualified_table_name(table)
         query = f'SELECT {col_clause} FROM {sql_table}'
 
@@ -301,7 +306,7 @@ class DB2Connector(BaseConnector):
             order_parts = []
             for s in sort:
                 direction = "DESC" if s.get("direction", "asc") == "desc" else "ASC"
-                order_parts.append(f'"{s["column"]}" {direction}')
+                order_parts.append(f'{self._quote_ident(s["column"])} {direction}')
             query += " ORDER BY " + ", ".join(order_parts)
 
         if limit:
@@ -406,7 +411,7 @@ class DB2Connector(BaseConnector):
         rn_upper = int(offset) + fetch_limit
         query = (
             f"SELECT * FROM ("
-            f'SELECT {col_clause}, ROW_NUMBER() OVER(ORDER BY t."{pk}") AS rn__ '
+            f'SELECT {col_clause}, ROW_NUMBER() OVER(ORDER BY t.{self._quote_ident(pk)}) AS rn__ '
             f"FROM {sql_table} t{where_clause}"
             f") WHERE rn__ >= {rn_lower} AND rn__ <= {rn_upper}"
         )

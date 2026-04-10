@@ -25,12 +25,17 @@ class MySQLConnector(BaseConnector):
         return True
 
     @staticmethod
-    def _qualified_table_name(table: str) -> str:
+    def _quote_ident(name: str) -> str:
+        """Escape a MySQL identifier by doubling any embedded backticks."""
+        return '`' + name.replace('`', '``') + '`'
+
+    @classmethod
+    def _qualified_table_name(cls, table: str) -> str:
         """Return a properly quoted schema.table SQL identifier."""
         if '.' in table:
             schema, tbl = table.split('.', 1)
-            return f'`{schema}`.`{tbl}`'
-        return f'`{table}`'
+            return f'{cls._quote_ident(schema)}.{cls._quote_ident(tbl)}'
+        return cls._quote_ident(table)
 
     def _build_ssl_context(self) -> ssl.SSLContext | None:
         """Build SSL context from credentials if SSL is configured."""
@@ -272,30 +277,30 @@ class MySQLConnector(BaseConnector):
             col_name = f["column"]
             mysql_type = col_types.get(col_name, "varchar")
             if op == "eq":
-                clauses.append(f"`{col_name}` = %s")
+                clauses.append(f"{self._quote_ident(col_name)} = %s")
                 params.append(self._coerce_value(f["value"], mysql_type))
             elif op == "neq":
-                clauses.append(f"`{col_name}` != %s")
+                clauses.append(f"{self._quote_ident(col_name)} != %s")
                 params.append(self._coerce_value(f["value"], mysql_type))
             elif op == "gt":
-                clauses.append(f"`{col_name}` > %s")
+                clauses.append(f"{self._quote_ident(col_name)} > %s")
                 params.append(self._coerce_value(f["value"], mysql_type))
             elif op == "lt":
-                clauses.append(f"`{col_name}` < %s")
+                clauses.append(f"{self._quote_ident(col_name)} < %s")
                 params.append(self._coerce_value(f["value"], mysql_type))
             elif op == "gte":
-                clauses.append(f"`{col_name}` >= %s")
+                clauses.append(f"{self._quote_ident(col_name)} >= %s")
                 params.append(self._coerce_value(f["value"], mysql_type))
             elif op == "lte":
-                clauses.append(f"`{col_name}` <= %s")
+                clauses.append(f"{self._quote_ident(col_name)} <= %s")
                 params.append(self._coerce_value(f["value"], mysql_type))
             elif op == "like":
-                clauses.append(f"`{col_name}` LIKE %s")
+                clauses.append(f"{self._quote_ident(col_name)} LIKE %s")
                 params.append(f"%{f['value']}%")
             elif op == "is_null":
-                clauses.append(f"`{col_name}` IS NULL")
+                clauses.append(f"{self._quote_ident(col_name)} IS NULL")
             elif op == "is_not_null":
-                clauses.append(f"`{col_name}` IS NOT NULL")
+                clauses.append(f"{self._quote_ident(col_name)} IS NOT NULL")
             elif op == "in":
                 values = f.get("value", [])
                 if not values:
@@ -303,7 +308,7 @@ class MySQLConnector(BaseConnector):
                 else:
                     coerced = [self._coerce_value(v, mysql_type) for v in values]
                     placeholders = ", ".join("%s" for _ in coerced)
-                    clauses.append(f"`{col_name}` IN ({placeholders})")
+                    clauses.append(f"{self._quote_ident(col_name)} IN ({placeholders})")
                     params.extend(coerced)
             elif op == "not_in":
                 values = f.get("value", [])
@@ -312,10 +317,10 @@ class MySQLConnector(BaseConnector):
                 else:
                     coerced = [self._coerce_value(v, mysql_type) for v in values]
                     placeholders = ", ".join("%s" for _ in coerced)
-                    clauses.append(f"`{col_name}` NOT IN ({placeholders})")
+                    clauses.append(f"{self._quote_ident(col_name)} NOT IN ({placeholders})")
                     params.extend(coerced)
             elif op == "between":
-                clauses.append(f"`{col_name}` BETWEEN %s AND %s")
+                clauses.append(f"{self._quote_ident(col_name)} BETWEEN %s AND %s")
                 params.append(self._coerce_value(f["value"], mysql_type))
                 params.append(self._coerce_value(f["value2"], mysql_type))
         if clauses:
@@ -336,7 +341,7 @@ class MySQLConnector(BaseConnector):
 
         col_types = await self._get_column_types(table) if filters else {}
 
-        col_clause = ", ".join(f"`{c}`" for c in columns) if columns else "*"
+        col_clause = ", ".join(self._quote_ident(c) for c in columns) if columns else "*"
         sql_table = self._qualified_table_name(table)
         query = f"SELECT {col_clause} FROM {sql_table}"
 
@@ -349,7 +354,7 @@ class MySQLConnector(BaseConnector):
             order_parts = []
             for s in sort:
                 direction = "DESC" if s.get("direction", "asc") == "desc" else "ASC"
-                order_parts.append(f"`{s['column']}` {direction}")
+                order_parts.append(f"{self._quote_ident(s['column'])} {direction}")
             query += " ORDER BY " + ", ".join(order_parts)
 
         if limit:
@@ -408,7 +413,7 @@ class MySQLConnector(BaseConnector):
         pk = await self._get_primary_key(table)
         col_types = await self._get_column_types(table) if filters else {}
 
-        col_clause = ", ".join(f"`{c}`" for c in columns) if columns else "*"
+        col_clause = ", ".join(self._quote_ident(c) for c in columns) if columns else "*"
         sql_table = self._qualified_table_name(table)
         query = f"SELECT {col_clause} FROM {sql_table}"
 
@@ -418,7 +423,7 @@ class MySQLConnector(BaseConnector):
 
         # Keyset pagination: when last_key is provided, add pk > last_key
         if last_key is not None:
-            pk_condition = f"`{pk}` > %s"
+            pk_condition = f"{self._quote_ident(pk)} > %s"
             params.append(last_key)
             if where_clause:
                 query += where_clause + f" AND {pk_condition}"
@@ -427,7 +432,7 @@ class MySQLConnector(BaseConnector):
         else:
             query += where_clause
 
-        query += f" ORDER BY `{pk}` LIMIT {int(batch_size) + 1}"
+        query += f" ORDER BY {self._quote_ident(pk)} LIMIT {int(batch_size) + 1}"
 
         # Fall back to OFFSET when no keyset key and offset > 0
         if last_key is None and offset > 0:

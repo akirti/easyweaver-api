@@ -26,12 +26,17 @@ class PostgresConnector(BaseConnector):
         return True
 
     @staticmethod
-    def _qualified_table_name(table: str) -> str:
+    def _quote_ident(name: str) -> str:
+        """Escape a SQL identifier by doubling any embedded double quotes."""
+        return '"' + name.replace('"', '""') + '"'
+
+    @classmethod
+    def _qualified_table_name(cls, table: str) -> str:
         """Return a properly quoted schema.table SQL identifier."""
         if '.' in table:
             schema, tbl = table.split('.', 1)
-            return f'"{schema}"."{tbl}"'
-        return f'"public"."{table}"'
+            return f'{cls._quote_ident(schema)}.{cls._quote_ident(tbl)}'
+        return f'"public".{cls._quote_ident(table)}'
 
     def _dsn(self) -> str:
         c = self.credentials
@@ -268,37 +273,37 @@ class PostgresConnector(BaseConnector):
             col_name = f["column"]
             pg_type = col_types.get(col_name, "text")
             if op == "eq":
-                clauses.append(f'"{col_name}" = ${idx}')
+                clauses.append(f'{self._quote_ident(col_name)} = ${idx}')
                 params.append(self._coerce_value(f["value"], pg_type))
                 idx += 1
             elif op == "neq":
-                clauses.append(f'"{col_name}" != ${idx}')
+                clauses.append(f'{self._quote_ident(col_name)} != ${idx}')
                 params.append(self._coerce_value(f["value"], pg_type))
                 idx += 1
             elif op == "gt":
-                clauses.append(f'"{col_name}" > ${idx}')
+                clauses.append(f'{self._quote_ident(col_name)} > ${idx}')
                 params.append(self._coerce_value(f["value"], pg_type))
                 idx += 1
             elif op == "lt":
-                clauses.append(f'"{col_name}" < ${idx}')
+                clauses.append(f'{self._quote_ident(col_name)} < ${idx}')
                 params.append(self._coerce_value(f["value"], pg_type))
                 idx += 1
             elif op == "gte":
-                clauses.append(f'"{col_name}" >= ${idx}')
+                clauses.append(f'{self._quote_ident(col_name)} >= ${idx}')
                 params.append(self._coerce_value(f["value"], pg_type))
                 idx += 1
             elif op == "lte":
-                clauses.append(f'"{col_name}" <= ${idx}')
+                clauses.append(f'{self._quote_ident(col_name)} <= ${idx}')
                 params.append(self._coerce_value(f["value"], pg_type))
                 idx += 1
             elif op == "like":
-                clauses.append(f'"{col_name}" ILIKE ${idx}')
+                clauses.append(f'{self._quote_ident(col_name)} ILIKE ${idx}')
                 params.append(f"%{f['value']}%")
                 idx += 1
             elif op == "is_null":
-                clauses.append(f'"{col_name}" IS NULL')
+                clauses.append(f'{self._quote_ident(col_name)} IS NULL')
             elif op == "is_not_null":
-                clauses.append(f'"{col_name}" IS NOT NULL')
+                clauses.append(f'{self._quote_ident(col_name)} IS NOT NULL')
             elif op == "in":
                 values = f.get("value", [])
                 if not values:
@@ -306,7 +311,7 @@ class PostgresConnector(BaseConnector):
                 else:
                     coerced = [self._coerce_value(v, pg_type) for v in values]
                     placeholders = ", ".join(f"${idx + i}" for i in range(len(coerced)))
-                    clauses.append(f'"{col_name}" IN ({placeholders})')
+                    clauses.append(f'{self._quote_ident(col_name)} IN ({placeholders})')
                     params.extend(coerced)
                     idx += len(coerced)
             elif op == "not_in":
@@ -316,11 +321,11 @@ class PostgresConnector(BaseConnector):
                 else:
                     coerced = [self._coerce_value(v, pg_type) for v in values]
                     placeholders = ", ".join(f"${idx + i}" for i in range(len(coerced)))
-                    clauses.append(f'"{col_name}" NOT IN ({placeholders})')
+                    clauses.append(f'{self._quote_ident(col_name)} NOT IN ({placeholders})')
                     params.extend(coerced)
                     idx += len(coerced)
             elif op == "between":
-                clauses.append(f'"{col_name}" BETWEEN ${idx} AND ${idx + 1}')
+                clauses.append(f'{self._quote_ident(col_name)} BETWEEN ${idx} AND ${idx + 1}')
                 params.append(self._coerce_value(f["value"], pg_type))
                 params.append(self._coerce_value(f["value2"], pg_type))
                 idx += 2
@@ -342,7 +347,7 @@ class PostgresConnector(BaseConnector):
 
         col_types = await self._get_column_types(table) if filters else {}
 
-        col_clause = ", ".join(f'"{c}"' for c in columns) if columns else "*"
+        col_clause = ", ".join(self._quote_ident(c) for c in columns) if columns else "*"
         sql_table = self._qualified_table_name(table)
         query = f'SELECT {col_clause} FROM {sql_table}'
 
@@ -355,7 +360,7 @@ class PostgresConnector(BaseConnector):
             order_parts = []
             for s in sort:
                 direction = "DESC" if s.get("direction", "asc") == "desc" else "ASC"
-                order_parts.append(f'"{s["column"]}" {direction}')
+                order_parts.append(f'{self._quote_ident(s["column"])} {direction}')
             query += " ORDER BY " + ", ".join(order_parts)
 
         if limit:
@@ -420,7 +425,7 @@ class PostgresConnector(BaseConnector):
         pk = await self._get_primary_key(table)
         col_types = await self._get_column_types(table) if filters else {}
 
-        col_clause = ", ".join(f'"{c}"' for c in columns) if columns else "*"
+        col_clause = ", ".join(self._quote_ident(c) for c in columns) if columns else "*"
         sql_table = self._qualified_table_name(table)
         query = f'SELECT {col_clause} FROM {sql_table}'
 
@@ -430,7 +435,7 @@ class PostgresConnector(BaseConnector):
 
         # Keyset pagination: when last_key is provided, add pk > last_key
         if last_key is not None:
-            pk_condition = f'"{pk}" > ${next_idx}'
+            pk_condition = f'{self._quote_ident(pk)} > ${next_idx}'
             params.append(last_key)
             next_idx += 1
             if where_clause:
@@ -441,7 +446,7 @@ class PostgresConnector(BaseConnector):
         else:
             query += where_clause
 
-        query += f' ORDER BY "{pk}" LIMIT {int(batch_size) + 1}'
+        query += f' ORDER BY {self._quote_ident(pk)} LIMIT {int(batch_size) + 1}'
 
         # Fall back to OFFSET when no keyset key and offset > 0
         if last_key is None and offset > 0:
