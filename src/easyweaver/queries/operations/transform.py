@@ -62,7 +62,7 @@ def _apply_cast(df: pl.DataFrame, col: str, t: dict) -> pl.DataFrame:
 def _apply_strip_leading_zeros(df: pl.DataFrame, col: str) -> pl.DataFrame:
     df = _ensure_string_col(df, col)
     df = df.with_columns(
-        pl.col(col).str.strip_chars().str.lstrip("0").alias(col)
+        pl.col(col).str.strip_chars().str.strip_chars_start("0").alias(col)
     )
     # Restore empty strings (was all zeros like "000") to "0"
     return df.with_columns(

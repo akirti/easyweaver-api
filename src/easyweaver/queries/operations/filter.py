@@ -29,6 +29,10 @@ def _coerce_value(value, dtype: pl.DataType):
         if isinstance(value, str):
             return value.lower() in ("true", "1", "t", "yes")
         return bool(value)
+    if dtype_base is pl.Utf8 or dtype_base is pl.String:
+        # Coerce numeric/other values to string for string columns
+        if not isinstance(value, str):
+            return str(value)
     return value
 
 

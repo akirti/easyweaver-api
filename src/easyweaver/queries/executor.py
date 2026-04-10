@@ -189,7 +189,7 @@ def _normalize_join_col(df: pl.DataFrame, col: str) -> pl.DataFrame:
         df = df.with_columns(
             pl.col(col)
             .str.strip_chars()
-            .str.lstrip("0")
+            .str.strip_chars_start("0")
             .alias(col)
         )
         # Restore empty strings (was all zeros like "000") to "0"
