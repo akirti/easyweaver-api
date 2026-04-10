@@ -209,6 +209,29 @@ class PostgresConnector(BaseConnector):
                 "total_sampled": len(rows),
             }
 
+    async def get_distinct_values(
+        self, table: str, column: str, limit: int = 500
+    ) -> dict[str, Any]:
+        assert self._pool
+        quoted_col = self._quote_ident(column)
+        qualified_table = self._qualified_table_name(table)
+        query = (
+            f"SELECT DISTINCT {quoted_col} FROM {qualified_table} "
+            f"WHERE {quoted_col} IS NOT NULL "
+            f"ORDER BY {quoted_col} LIMIT {int(limit) + 1}"
+        )
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query)
+        values = [row[column] for row in rows]
+        truncated = len(values) > limit
+        if truncated:
+            values = values[:limit]
+        return {
+            "values": values,
+            "truncated": truncated,
+            "total_count": len(values) if not truncated else None,
+        }
+
     async def _get_column_types(self, table: str) -> dict[str, str]:
         """Fetch and cache column name→data_type mapping for a table."""
         if table in self._column_types:

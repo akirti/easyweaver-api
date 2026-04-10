@@ -122,6 +122,25 @@ class MongoDBConnector(BaseConnector):
         columns = self._infer_columns(docs)
         return {"columns": columns, "rows": rows, "total_sampled": len(rows)}
 
+    async def get_distinct_values(
+        self, table: str, column: str, limit: int = 500
+    ) -> dict[str, Any]:
+        coll = self._db[table]
+        raw_values = await coll.distinct(column)
+        # Filter nulls, sort, slice
+        values = sorted(
+            [v for v in raw_values if v is not None],
+            key=lambda x: str(x),
+        )
+        truncated = len(values) > limit
+        if truncated:
+            values = values[: limit]
+        return {
+            "values": values,
+            "truncated": truncated,
+            "total_count": len(values) if not truncated else None,
+        }
+
     async def execute_query(
         self,
         table: str,

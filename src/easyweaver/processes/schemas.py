@@ -9,9 +9,15 @@ from easyweaver.queries.schemas import DerivedColumnSpec, DistinctSpec, GroupByS
 
 
 class ParamDefinition(BaseModel):
-    type: Literal["string", "number", "boolean", "date", "datetime"]
+    type: Literal[
+        "string", "number", "boolean", "date", "datetime",
+        "select", "multi_select", "boolean_yesno", "boolean_truefalse",
+    ]
     default: Any = None
     label: str = ""
+    options: list[Any] = Field(default_factory=list)
+    options_source: dict | None = None  # {"source_id": "...", "table": "...", "column": "..."}
+    max_options: int = 500
 
 
 class ProcessFilterConfig(BaseModel):

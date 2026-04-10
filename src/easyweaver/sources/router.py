@@ -98,6 +98,26 @@ async def preview_table(
         return await connector.preview_table(table_name)
 
 
+@router.get("/{source_id}/tables/{table:path}/columns/{column}/distinct")
+async def get_column_distinct_values(
+    source_id: uuid.UUID,
+    table: str,
+    column: str,
+    limit: int = 500,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    if limit > 5000:
+        limit = 5000
+    source = await service.get_source(db, source_id)
+    creds = service.get_source_credentials(source)
+    from easyweaver.connectors.registry import get_connector
+
+    connector = get_connector(source.source_type, creds)
+    async with connector:
+        result = await connector.get_distinct_values(table, column, limit)
+    return result
+
+
 _ALLOWED_FILE_EXTENSIONS = {".csv", ".json", ".xlsx", ".xls"}
 _EXTENSION_TO_FORMAT = {".csv": "csv", ".json": "json", ".xlsx": "xlsx", ".xls": "xls"}
 

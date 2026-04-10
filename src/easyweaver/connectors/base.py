@@ -96,6 +96,17 @@ class BaseConnector(ABC):
             f"Check supports_batching before calling execute_query_batched()."
         )
 
+    async def get_distinct_values(
+        self, table: str, column: str, limit: int = 500
+    ) -> dict[str, Any]:
+        """Return distinct non-null values for a column.
+
+        Returns: {"values": list, "truncated": bool, "total_count": int | None}
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support get_distinct_values"
+        )
+
     async def __aenter__(self):
         await self.connect()
         return self

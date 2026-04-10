@@ -132,6 +132,27 @@ class FileConnector(BaseConnector):
             "total_sampled": len(preview_df),
         }
 
+    async def get_distinct_values(
+        self, table: str, column: str, limit: int = 500
+    ) -> dict[str, Any]:
+        assert self._df is not None
+        values = (
+            self._df[column]
+            .drop_nulls()
+            .unique()
+            .sort()
+            .head(limit + 1)
+            .to_list()
+        )
+        truncated = len(values) > limit
+        if truncated:
+            values = values[:limit]
+        return {
+            "values": values,
+            "truncated": truncated,
+            "total_count": len(values) if not truncated else None,
+        }
+
     async def execute_query(
         self,
         table: str,

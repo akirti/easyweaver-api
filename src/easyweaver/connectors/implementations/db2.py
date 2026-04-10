@@ -159,6 +159,36 @@ class DB2Connector(BaseConnector):
 
         return await asyncio.to_thread(_fetch)
 
+    async def get_distinct_values(
+        self, table: str, column: str, limit: int = 500
+    ) -> dict[str, Any]:
+        assert self._conn
+        quoted_col = self._quote_ident(column)
+        qualified_table = self._qualified_table_name(table)
+        fetch_count = int(limit) + 1
+        query = (
+            f"SELECT DISTINCT {quoted_col} FROM {qualified_table} "
+            f"WHERE {quoted_col} IS NOT NULL "
+            f"ORDER BY {quoted_col} FETCH FIRST {fetch_count} ROWS ONLY"
+        )
+
+        def _execute() -> list:
+            cursor = self._conn.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            cursor.close()
+            return [row[0] for row in rows]
+
+        values = await asyncio.to_thread(_execute)
+        truncated = len(values) > limit
+        if truncated:
+            values = values[:limit]
+        return {
+            "values": values,
+            "truncated": truncated,
+            "total_count": len(values) if not truncated else None,
+        }
+
     async def _get_column_types(self, table: str) -> dict[str, str]:
         if table in self._column_types:
             return self._column_types[table]

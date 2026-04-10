@@ -237,6 +237,11 @@ class RestAPIConnector(BaseConnector):
         columns = _infer_columns_from_rows(sample) if sample else []
         return {"columns": columns, "rows": sample, "total_sampled": len(sample)}
 
+    async def get_distinct_values(
+        self, table: str, column: str, limit: int = 500
+    ) -> dict[str, Any]:
+        return {"values": [], "truncated": False, "total_count": 0}
+
     async def execute_query(
         self,
         table: str,
