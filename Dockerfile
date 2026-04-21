@@ -17,9 +17,14 @@ COPY alembic.ini ./
 COPY alembic/ ./alembic/
 COPY src/ ./src/
 COPY scripts/ ./scripts/
+COPY config/ ./config/
+COPY docker-entrypoint.py ./docker-entrypoint.py
 
 RUN poetry install --only main --extras db2 --no-interaction --no-ansi
 
+ENV CONFIG_PATH=/app/config
+ENV EASYWEAVER_ENVIRONMENT=dev
+
 EXPOSE 8001
 
-CMD ["uvicorn", "easyweaver.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["python3", "/app/docker-entrypoint.py"]

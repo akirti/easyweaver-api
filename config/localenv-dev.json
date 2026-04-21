@@ -1,0 +1,107 @@
+{
+  "globals":{
+    "databases":{
+      "default":{
+        "max_pool_size":"{globals.databases.default.max_pool_size}",
+        "min_pool_size":"{globals.databases.default.min_pool_size}",
+        "max_idle_time_ms":"{globals.databases.default.max_idle_time_ms}",
+        "server_selection_timeout_ms":"{globals.databases.default.server_selection_timeout_ms}",
+        "connect_timeout_ms":"{globals.databases.default.connect_timeout_ms}",
+        "socket_timeout_ms":"{globals.databases.default.socket_timeout_ms}",
+        "heartbeat_frequency_ms":"{globals.databases.default.heartbeat_frequency_ms}",
+        "wait_queue_timeout_ms":"{globals.databases.default.wait_queue_timeout_ms}",
+        "max_result_rows":"{globals.databases.default.max_result_rows}",
+        "max_export_rows":"{globals.databases.default.max_export_rows}",
+        "query_timeout_seconds":"{globals.databases.default.query_timeout_seconds}",
+        "max_concurrent_queries":"{globals.databases.default.max_concurrent_queries}",
+        "retry_writes":true,
+        "retry_reads":true
+      }
+    }
+  },
+  "databases": {
+    "metadata": {
+      "type": "db",
+      "db_info": {
+        "type": "mongodb",
+        "connection_scheme": "{databases.metadata.db_info.connection_scheme}",
+        "username": "{databases.metadata.db_info.username}",
+        "password": "{databases.metadata.db_info.password}",
+        "host": "{databases.metadata.db_info.host}",
+        "database": "{databases.metadata.db_info.database}",
+        "collections": "{databases.metadata.db_info.collections}"
+      }
+    }
+  },
+  "environment":{
+    "app_name":"easylife-easyweaver-api",
+    "app_version":"1.0.0",
+    "debug":true,
+    "log_level":"DEBUG",
+    "port":8000,
+    "space":"{environment.space}",    
+    "authentication": {
+      "jwt_secret_key": "{environment.authentication.jwt_secret_key}",
+      "jwt_access_token_expiry_minutes": "{environment.authentication.access_token_expiry_minutes}",
+      "jwt_refresh_token_expiry_minutes": "{environment.authentication.jwt_refresh_token_expiry_minutes}",
+      "jwt_issuer": "{environment.authentication.jwt_issuer}",
+      "jwt_audience": "{environment.authentication.jwt_audience}",
+      "private_handshake_secret_key": "{environment.authentication.private_handshake_secret_key}"      
+    },
+    "encryption": {
+     "fernet_key":"{environment.encryption.fernet_key}"
+    },
+    "storage": {
+      "cachetype":"{environment.storage.cachetype}",
+      "type": "{environment.storage.type}",
+      "gcs": {   
+        "project_name": "{environment.storage.gcs.project_name}",
+        "bucket_name": "{environment.storage.gcs.bucket_name}",
+        "upload_folder": "{environment.storage.gcs.upload_folder}",
+        "config_folder": "{environment.storage.gcs.config_folder}",
+        "credentials_json":{
+          "type": "{environment.storage.gcs.credentials_json.type}",
+          "project_id": "{environment.storage.gcs.credentials_json.project_id}",
+          "private_key_id": "{environment.storage.gcs.credentials_json.private_key_id}",
+          "private_key": "{environment.storage.gcs.credentials_json.private_key}",
+          "client_email": "{environment.storage.gcs.credentials_json.client_email}",
+          "client_id": "{environment.storage.gcs.credentials_json.client_id}",
+          "auth_uri": "{environment.storage.gcs.credentials_json.auth_uri}",
+          "token_uri": "{environment.storage.gcs.credentials_json.token_uri}",
+          "auth_provider_x509_cert_url": "{environment.storage.gcs.credentials_json.auth_provider_x509_cert_url}",
+          "client_x509_cert_url": "{environment.storage.gcs.credentials_json.client_x509_cert_url}",
+          "universe_domain": "{environment.storage.gcs.credentials_json.universe_domain}"
+        },
+        "project_id": "{environment.storage.gcs.project_id}",
+        "credentials_path": "{environment.storage.gcs.credentials_path}"
+      }
+    },
+    "cors": {
+      "origins": "{environment.cors.origins}"
+    },
+    "celery":{
+      "broker_url":"{environment.celery.broker_url}",
+      "result_backend":"{environment.celery.result_backend}"
+    },
+    "redis":{
+      "url":"{environment.redis.url}",
+      "resul_ttl_seconds":"{globals.databases.default.resul_ttl_seconds}",
+      "schema_cache_ttl_seconds":"{globals.databases.default.schema_cache_ttl_seconds}",
+      "cache_ttl_seconds":"{environment.redis.cache_ttl_seconds}",
+      "lock_timeout_seconds":"{environment.redis.lock_timeout_seconds}",
+      "lock_retry_delay_seconds":"{environment.redis.lock_retry_delay_seconds}",
+      "lock_max_retries":"{environment.redis.lock_max_retries}",
+      "lock_prefix":"{environment.redis.lock_prefix}",
+      "cache_prefix":"{environment.redis.cache_prefix}",
+      "rate_limit_prefix":"{environment.redis.rate_limit_prefix}",
+      "rate_limit_window_seconds":"{environment.redis.rate_limit_window_seconds}",
+      "rate_limit_max_requests":"{environment.redis.rate_limit_max_requests}",
+      "rate_limit_block_duration_seconds":"{environment.redis.rate_limit_block_duration_seconds}" ,
+      "rate_limit_whitelist":"{environment.redis.rate_limit_whitelist}",
+      "rate_limit_blacklist":"{environment.redis.rate_limit_blacklist}",
+      "rate_limit_enable":"{environment.redis.rate_limit_enable}",
+      "rate_limit_skip_on_auth":"{environment.redis.rate_limit_skip_on_auth}"
+      
+    }
+  }
+}

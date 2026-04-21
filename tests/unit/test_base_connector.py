@@ -98,7 +98,10 @@ class TestSettings:
         field_defaults = {}
         for item in settings_cls.body:
             if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name) and item.value is not None:
-                field_defaults[item.target.id] = ast.literal_eval(item.value)
+                try:
+                    field_defaults[item.target.id] = ast.literal_eval(item.value)
+                except (ValueError, KeyError):
+                    pass  # Skip fields with dynamic defaults (e.g. _get() calls)
 
         assert field_defaults["batch_default_target_seconds"] == 10.0
         assert field_defaults["batch_min_size"] == 1_000
