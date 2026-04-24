@@ -11,6 +11,11 @@
         "heartbeat_frequency_ms":"{globals.databases.default.heartbeat_frequency_ms}",
         "wait_queue_timeout_ms":"{globals.databases.default.wait_queue_timeout_ms}",
         "max_result_rows":"{globals.databases.default.max_result_rows}",
+        "max_export_rows":"{globals.databases.default.max_export_rows}",
+        "query_timeout_seconds":"{globals.databases.default.query_timeout_seconds}",
+        "max_concurrent_queries":"{globals.databases.default.max_concurrent_queries}",
+        "resul_ttl_seconds":"{globals.databases.default.resul_ttl_seconds}",
+        "schema_cache_ttl_seconds":"{globals.databases.default.schema_cache_ttl_seconds}",
         "retry_writes":true,
         "retry_reads":true
       }
