@@ -4,6 +4,7 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings
 
+from . import ENVIRONEMNT_VARIABLE_PREFIX, OS_PROPERTY_SEPRATOR
 
 def _load_config() -> dict:
     """Load configuration from JSON files via ConfigurationLoader.
@@ -65,7 +66,7 @@ def _get(path: str, default=None):
 
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "EW_", "env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    model_config = {"env_prefix": ENVIRONEMNT_VARIABLE_PREFIX+"_", "env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     # App
     app_name: str = _get("environment.app_name", "easyweaver")
