@@ -64,5 +64,9 @@ def _register_routes(app: FastAPI):
 
     app.include_router(dashboard_router, prefix="/api/v1/dashboard", tags=["dashboard"])
 
+    from easyweaver.lookups.router import router as lookups_router
+
+    app.include_router(lookups_router, prefix="/api/v1/lookups", tags=["lookups"])
+
 
 app = create_app()

@@ -93,6 +93,17 @@ async def create_configuration(
     await db.process_configurations.insert_one(config.to_doc())
     logger.info("process_configuration_created", id=str(config.id), name=config.name)
 
+    # Build and cache lookup data for select/multi_select params
+    if config.params:
+        try:
+            from easyweaver.lookups.service import build_lookups_from_params, upsert_lookups
+
+            lookups, references = await build_lookups_from_params(db, config.params)
+            if lookups:
+                await upsert_lookups(db, str(config.id), lookups, references)
+        except Exception as e:
+            logger.warning("lookup_build_on_save_failed", id=str(config.id), error=str(e))
+
     # Save config JSON to GCP if requested
     if data.save_destination in ("gcp", "both"):
         try:
@@ -137,6 +148,17 @@ async def update_configuration(
     )
     updated = await get_configuration(db, cid)
 
+    # Rebuild lookup cache if params were updated
+    if data.params is not None and updated.params:
+        try:
+            from easyweaver.lookups.service import build_lookups_from_params, upsert_lookups
+
+            lookups, references = await build_lookups_from_params(db, updated.params)
+            if lookups:
+                await upsert_lookups(db, cid, lookups, references)
+        except Exception as e:
+            logger.warning("lookup_rebuild_on_update_failed", id=cid, error=str(e))
+
     # Save updated config to GCP if destination requires it
     dest = data.save_destination or updated.save_destination
     if dest in ("gcp", "both"):
@@ -159,6 +181,13 @@ async def delete_configuration(db: AsyncIOMotorDatabase, config_id: str | uuid.U
     result = await db.process_configurations.delete_one({"_id": cid})
     if result.deleted_count == 0:
         raise NotFoundError("ProcessConfiguration", config_id)
+    # Clean up lookup cache
+    try:
+        from easyweaver.lookups.service import delete_lookups
+
+        await delete_lookups(db, cid)
+    except Exception:
+        pass
     logger.info("process_configuration_deleted", id=cid)
 
 

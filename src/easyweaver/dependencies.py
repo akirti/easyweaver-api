@@ -47,6 +47,8 @@ async def init_db():
     await _meta_db.data_snapshots.create_index("config_id")
     await _meta_db.data_snapshots.create_index("captured_at")
     await _meta_db.data_snapshots.create_index([("config_id", 1), ("captured_at", -1)])
+    await _meta_db.configurations.create_index("type")
+    await _meta_db.configurations.create_index("process_id")
     await _meta_db.batch_size_history.create_index(
         [("source_id", 1), ("connector_type", 1), ("table", 1)]
     )
