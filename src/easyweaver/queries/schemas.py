@@ -26,6 +26,9 @@ class FilterCondition(BaseModel):
             raise ValueError("value_from is only supported with 'in' or 'not_in' operators")
         if self.operator in ("in", "not_in") and self.value is None and self.value_from is None:
             raise ValueError("'in'/'not_in' requires either 'value' (list) or 'value_from'")
+        # Normalize comma-separated string to list for in/not_in
+        if self.operator in ("in", "not_in") and isinstance(self.value, str):
+            self.value = [v.strip() for v in self.value.split(",") if v.strip()]
         if self.operator == "between" and (self.value is None or self.value2 is None):
             raise ValueError("'between' requires both 'value' and 'value2'")
         return self

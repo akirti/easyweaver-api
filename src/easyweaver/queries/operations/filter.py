@@ -63,12 +63,16 @@ def _build_filter_expr(col: str, op: str, val, f: dict, dtype: pl.DataType) -> p
     elif op == "is_not_null":
         return pl.col(col).is_not_null()
     elif op == "in":
+        if isinstance(val, str):
+            val = [v.strip() for v in val.split(",") if v.strip()]
         values = val if isinstance(val, list) else []
         if values:
             return pl.col(col).is_in(_coerce_list(values, dtype))
         else:
             return pl.lit(False)
     elif op == "not_in":
+        if isinstance(val, str):
+            val = [v.strip() for v in val.split(",") if v.strip()]
         values = val if isinstance(val, list) else []
         if values:
             return ~pl.col(col).is_in(_coerce_list(values, dtype))

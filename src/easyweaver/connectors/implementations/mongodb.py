@@ -275,9 +275,13 @@ class MongoDBConnector(BaseConnector):
             elif op == "is_not_null":
                 conditions.append({col: {"$exists": True, "$ne": None}})
             elif op == "in":
+                if isinstance(val, str):
+                    val = [v.strip() for v in val.split(",") if v.strip()]
                 values = val if isinstance(val, list) else []
                 conditions.append({col: {"$in": values}})
             elif op == "not_in":
+                if isinstance(val, str):
+                    val = [v.strip() for v in val.split(",") if v.strip()]
                 values = val if isinstance(val, list) else []
                 conditions.append({col: {"$nin": values}})
             elif op == "between":

@@ -285,6 +285,8 @@ class DB2Connector(BaseConnector):
                 clauses.append(f'{col_prefix}{self._quote_ident(col_name)} IS NOT NULL')
             elif op == "in":
                 values = f.get("value", [])
+                if isinstance(values, str):
+                    values = [v.strip() for v in values.split(",") if v.strip()]
                 if not values:
                     clauses.append("1=0")
                 else:
@@ -294,6 +296,8 @@ class DB2Connector(BaseConnector):
                     params.extend(coerced)
             elif op == "not_in":
                 values = f.get("value", [])
+                if isinstance(values, str):
+                    values = [v.strip() for v in values.split(",") if v.strip()]
                 if not values:
                     clauses.append("1=1")
                 else:
