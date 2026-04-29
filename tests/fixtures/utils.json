@@ -1,0 +1,20 @@
+{
+  "args_util": {
+    "sample_args": {
+      "string_val": "hello",
+      "int_val": 42,
+      "list_val": ["a", "b", "c"],
+      "nested": {"key": "value"}
+    }
+  },
+  "dict_util": {
+    "nested_dict": {
+      "level1": {
+        "level2": {
+          "key": "deep_value"
+        }
+      },
+      "flat_key": "flat_value"
+    }
+  }
+}
