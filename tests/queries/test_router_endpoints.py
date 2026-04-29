@@ -652,3 +652,1098 @@ class TestWebSocketAuth:
         ):
             with client.websocket_connect("/queries/run/ws?token=bad") as ws:
                 ws.receive_json()
+
+
+# ── _execute_inline background task ───────────────────────────────────
+
+
+class TestExecuteInline:
+    """Direct tests of the _execute_inline background coroutine."""
+
+    @pytest.mark.anyio
+    async def test_single_query_happy_path(self):
+        """Single-type query completes successfully and stores result."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]})
+
+        request = QueryRequest.model_validate(
+            {
+                "type": "single",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+            }
+        )
+
+        mock_source = MagicMock()
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_db = _make_mock_db(_make_run(run_id))
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.queries.router.service.create_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=mock_db),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_single_source", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.sources.service.get_source", new=AsyncMock(return_value=mock_source)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_inline(run_id, request)
+
+        mock_store.store_result.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_join_query_calls_execute_join(self):
+        """Join-type query calls execute_join (not execute_single_source)."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [1]})
+
+        request = QueryRequest.model_validate(
+            {
+                "type": "join",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+                "right": {
+                    "source_id": _SOURCE_ID,
+                    "table": "customers",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+                "join": {"join_type": "inner", "left_on": "id", "right_on": "id"},
+            }
+        )
+
+        mock_source = MagicMock()
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_db = _make_mock_db(_make_run(run_id))
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        execute_join_mock = AsyncMock(return_value=df_result)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=mock_db),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_join", new=execute_join_mock),
+            patch("easyweaver.sources.service.get_source", new=AsyncMock(return_value=mock_source)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_inline(run_id, request)
+
+        execute_join_mock.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_timeout_marks_run_as_failed(self):
+        """asyncio.TimeoutError causes run to be marked failed."""
+        import asyncio as _asyncio
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        request = QueryRequest.model_validate(
+            {
+                "type": "single",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+            }
+        )
+
+        update_mock = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=update_mock),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("asyncio.wait_for", side_effect=_asyncio.TimeoutError()),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 1
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_inline(run_id, request)
+
+        # Last update_query_run call should be with status="failed"
+        last_call = update_mock.call_args
+        assert last_call[1].get("status") == "failed" or last_call[0][2] == "failed"
+
+    @pytest.mark.anyio
+    async def test_exception_marks_run_as_failed(self):
+        """Generic exception causes run to be marked failed with error message."""
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        request = QueryRequest.model_validate(
+            {
+                "type": "single",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+            }
+        )
+
+        update_mock = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=update_mock),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.sources.service.get_source", side_effect=RuntimeError("db down")),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_inline(run_id, request)
+
+        # Should have called update with status=failed
+        calls = update_mock.call_args_list
+        failed_calls = [c for c in calls if c[1].get("status") == "failed"]
+        assert len(failed_calls) >= 1
+
+    @pytest.mark.anyio
+    async def test_row_limit_truncates_result(self):
+        """Results exceeding max_result_rows are truncated before storing."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        # 10 rows but limit is 3
+        df_result = pl.DataFrame({"id": list(range(10))})
+        captured = {}
+
+        request = QueryRequest.model_validate(
+            {
+                "type": "single",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+            }
+        )
+
+        mock_source = MagicMock()
+        mock_store = MagicMock()
+
+        async def capture_store(rid, df):
+            captured["df"] = df
+
+        mock_store.store_result = capture_store
+        mock_db = _make_mock_db(_make_run(run_id))
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=mock_db),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_single_source", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.sources.service.get_source", new=AsyncMock(return_value=mock_source)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 3
+
+            await _execute_inline(run_id, request)
+
+        assert "df" in captured
+        assert len(captured["df"]) == 3
+
+    @pytest.mark.anyio
+    async def test_transforms_applied_when_present(self):
+        """Transforms are applied to the dataframe before storing."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"name": ["alice", "bob"]})
+
+        request = QueryRequest.model_validate(
+            {
+                "type": "single",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+                "transforms": [{"column": "name", "type": "uppercase"}],
+            }
+        )
+
+        mock_source = MagicMock()
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        apply_transforms_mock = MagicMock(return_value=df_result)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_single_source", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.sources.service.get_source", new=AsyncMock(return_value=mock_source)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.queries.operations.transform.apply_transforms", apply_transforms_mock),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_inline(run_id, request)
+
+        apply_transforms_mock.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_sort_applied_when_present(self):
+        """Sort is applied to the dataframe before storing."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [3, 1, 2]})
+
+        request = QueryRequest.model_validate(
+            {
+                "type": "single",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+                "sort": [{"column": "id", "direction": "asc"}],
+            }
+        )
+
+        mock_source = MagicMock()
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        apply_sort_mock = MagicMock(return_value=df_result)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_single_source", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.sources.service.get_source", new=AsyncMock(return_value=mock_source)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.queries.executor.apply_sort", apply_sort_mock),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_inline(run_id, request)
+
+        apply_sort_mock.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_group_by_applied_when_present(self):
+        """group_by is applied when specified in request."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"category": ["A", "B"], "total": [10, 20]})
+
+        request = QueryRequest.model_validate(
+            {
+                "type": "single",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+                "group_by": {
+                    "group_columns": ["category"],
+                    "aggregations": [{"column": "total", "function": "sum"}],
+                },
+            }
+        )
+
+        mock_source = MagicMock()
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        group_by_mock = MagicMock(return_value=df_result)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_single_source", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.sources.service.get_source", new=AsyncMock(return_value=mock_source)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.queries.operations.group_by.apply_group_by", group_by_mock),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_inline(run_id, request)
+
+        group_by_mock.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_distinct_applied_when_present(self):
+        """distinct is applied when specified in request."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [1, 2]})
+
+        request = QueryRequest.model_validate(
+            {
+                "type": "single",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+                "distinct": {"enabled": True, "columns": ["id"]},
+            }
+        )
+
+        mock_source = MagicMock()
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        distinct_mock = MagicMock(return_value=df_result)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_single_source", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.sources.service.get_source", new=AsyncMock(return_value=mock_source)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.queries.operations.distinct.apply_distinct", distinct_mock),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_inline(run_id, request)
+
+        distinct_mock.assert_called_once()
+
+
+# ── _execute_join_results_inline background task ──────────────────────
+
+
+class TestExecuteJoinResultsInline:
+    """Direct tests of the _execute_join_results_inline background coroutine."""
+
+    def _make_join_results_request(
+        self,
+        left_run_id: str = _RUN_ID,
+        right_run_id: str = _RUN_ID_2,
+    ):
+        from easyweaver.queries.schemas import JoinResultsRequest
+
+        return JoinResultsRequest.model_validate(
+            {
+                "left_run_id": left_run_id,
+                "right_run_id": right_run_id,
+                "join": {"join_type": "inner", "left_on": "id", "right_on": "id"},
+            }
+        )
+
+    @pytest.mark.anyio
+    async def test_happy_path_stores_result(self):
+        """Successful join stores result and marks run completed."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_join_results_inline
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [1, 2]})
+        request = self._make_join_results_request()
+
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_store.get_result = AsyncMock(return_value=df_result)
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+        update_mock = AsyncMock()
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=update_mock),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_join_from_results", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_join_results_inline(run_id, request)
+
+        mock_store.store_result.assert_called_once()
+        completed_calls = [
+            c for c in update_mock.call_args_list if c[1].get("status") == "completed"
+        ]
+        assert len(completed_calls) >= 1
+
+    @pytest.mark.anyio
+    async def test_timeout_marks_run_failed(self):
+        """TimeoutError causes run to be marked failed."""
+        import asyncio as _asyncio
+        from easyweaver.queries.router import _execute_join_results_inline
+
+        run_id = str(uuid.uuid4())
+        request = self._make_join_results_request()
+
+        update_mock = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=update_mock),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("asyncio.wait_for", side_effect=_asyncio.TimeoutError()),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 1
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_join_results_inline(run_id, request)
+
+        failed_calls = [c for c in update_mock.call_args_list if c[1].get("status") == "failed"]
+        assert len(failed_calls) >= 1
+
+    @pytest.mark.anyio
+    async def test_exception_marks_run_failed(self):
+        """Generic exception causes run to be marked failed."""
+        from easyweaver.queries.router import _execute_join_results_inline
+
+        run_id = str(uuid.uuid4())
+        request = self._make_join_results_request()
+
+        update_mock = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=update_mock),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch(
+                "easyweaver.queries.executor.execute_join_from_results",
+                side_effect=RuntimeError("join exploded"),
+            ),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_join_results_inline(run_id, request)
+
+        failed_calls = [c for c in update_mock.call_args_list if c[1].get("status") == "failed"]
+        assert len(failed_calls) >= 1
+
+    @pytest.mark.anyio
+    async def test_row_limit_enforced(self):
+        """Results exceeding max_result_rows are truncated."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_join_results_inline
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": list(range(20))})
+        request = self._make_join_results_request()
+
+        captured = {}
+        mock_store = MagicMock()
+
+        async def capture_store(rid, df):
+            captured["df"] = df
+
+        mock_store.store_result = capture_store
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_join_from_results", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 5
+
+            await _execute_join_results_inline(run_id, request)
+
+        assert "df" in captured
+        assert len(captured["df"]) == 5
+
+    @pytest.mark.anyio
+    async def test_sort_applied_when_present(self):
+        """Sort is applied in join results execution."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_join_results_inline
+        from easyweaver.queries.schemas import JoinResultsRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [3, 1, 2]})
+
+        request = JoinResultsRequest.model_validate(
+            {
+                "left_run_id": _RUN_ID,
+                "right_run_id": _RUN_ID_2,
+                "join": {"join_type": "inner", "left_on": "id", "right_on": "id"},
+                "sort": [{"column": "id", "direction": "asc"}],
+            }
+        )
+
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        apply_sort_mock = MagicMock(return_value=df_result)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_join_from_results", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.queries.executor.apply_sort", apply_sort_mock),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_join_results_inline(run_id, request)
+
+        apply_sort_mock.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_transforms_applied_when_present(self):
+        """Transforms are applied in join results execution."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_join_results_inline
+        from easyweaver.queries.schemas import JoinResultsRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"name": ["alice"]})
+
+        request = JoinResultsRequest.model_validate(
+            {
+                "left_run_id": _RUN_ID,
+                "right_run_id": _RUN_ID_2,
+                "join": {"join_type": "inner", "left_on": "id", "right_on": "id"},
+                "transforms": [{"column": "name", "type": "uppercase"}],
+            }
+        )
+
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        apply_transforms_mock = MagicMock(return_value=df_result)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_join_from_results", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.queries.operations.transform.apply_transforms", apply_transforms_mock),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_join_results_inline(run_id, request)
+
+        apply_transforms_mock.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_select_columns_applied_when_present(self):
+        """select_columns is applied when specified in join results request."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_join_results_inline
+        from easyweaver.queries.schemas import JoinResultsRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [1], "name": ["a"], "extra": [99]})
+
+        request = JoinResultsRequest.model_validate(
+            {
+                "left_run_id": _RUN_ID,
+                "right_run_id": _RUN_ID_2,
+                "join": {"join_type": "inner", "left_on": "id", "right_on": "id"},
+                "select_columns": ["id", "name"],
+            }
+        )
+
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        select_mock = MagicMock(return_value=df_result.select(["id", "name"]))
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_join_from_results", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.queries.executor.select_columns", select_mock),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_join_results_inline(run_id, request)
+
+        select_mock.assert_called_once()
+
+
+class TestExecuteInlineBindings:
+    """Tests for binding resolution inside _execute_inline."""
+
+    @pytest.mark.anyio
+    async def test_distinct_bindings_applied_when_filters_returned(self):
+        """When resolve_distinct_bindings returns filters they are applied."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]})
+
+        # Build a request with a data binding
+        request = QueryRequest.model_validate(
+            {
+                "type": "single",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+                "bindings": [
+                    {
+                        "source_run_id": _RUN_ID,
+                        "mode": "distinct",
+                        "mappings": [{"source_column": "id", "target_column": "id"}],
+                    }
+                ],
+            }
+        )
+
+        mock_source = MagicMock()
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        distinct_filters = [{"column": "id", "operator": "in", "value": [1, 2]}]
+        apply_filters_mock = MagicMock(return_value=df_result.head(2))
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_single_source", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.sources.service.get_source", new=AsyncMock(return_value=mock_source)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch(
+                "easyweaver.queries.operations.binding.resolve_distinct_bindings",
+                new=AsyncMock(return_value=distinct_filters),
+            ),
+            patch(
+                "easyweaver.queries.operations.binding.resolve_row_pair_bindings",
+                new=AsyncMock(return_value=None),
+            ),
+            patch("easyweaver.queries.operations.filter.apply_filters", apply_filters_mock),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_inline(run_id, request)
+
+        apply_filters_mock.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_row_pair_bindings_applied_when_pair_df_returned(self):
+        """When resolve_row_pair_bindings returns a df, apply_row_pair_filter is called."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_inline
+        from easyweaver.queries.schemas import QueryRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [1, 2, 3]})
+        pair_df = pl.DataFrame({"id": [1, 2]})
+
+        request = QueryRequest.model_validate(
+            {
+                "type": "single",
+                "left": {
+                    "source_id": _SOURCE_ID,
+                    "table": "orders",
+                    "filters": [],
+                    "filter_logic": "and",
+                },
+                "bindings": [
+                    {
+                        "source_run_id": _RUN_ID,
+                        "mode": "row_pair",
+                        "mappings": [{"source_column": "id", "target_column": "id"}],
+                    }
+                ],
+            }
+        )
+
+        mock_source = MagicMock()
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        apply_row_pair_mock = MagicMock(return_value=df_result.head(2))
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_single_source", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.sources.service.get_source", new=AsyncMock(return_value=mock_source)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch(
+                "easyweaver.queries.operations.binding.resolve_distinct_bindings",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "easyweaver.queries.operations.binding.resolve_row_pair_bindings",
+                new=AsyncMock(return_value=pair_df),
+            ),
+            patch("easyweaver.queries.operations.binding.apply_row_pair_filter", apply_row_pair_mock),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_inline(run_id, request)
+
+        apply_row_pair_mock.assert_called_once()
+
+
+class TestExecuteJoinResultsInlineBindings:
+    """Tests for binding resolution inside _execute_join_results_inline."""
+
+    @pytest.mark.anyio
+    async def test_bindings_applied_in_join_results(self):
+        """Bindings are resolved and applied in join results execution path."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_join_results_inline
+        from easyweaver.queries.schemas import JoinResultsRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [1, 2, 3]})
+        distinct_filters = [{"column": "id", "operator": "in", "value": [1, 2]}]
+
+        request = JoinResultsRequest.model_validate(
+            {
+                "left_run_id": _RUN_ID,
+                "right_run_id": _RUN_ID_2,
+                "join": {"join_type": "inner", "left_on": "id", "right_on": "id"},
+                "bindings": [
+                    {
+                        "source_run_id": _RUN_ID,
+                        "mode": "distinct",
+                        "mappings": [{"source_column": "id", "target_column": "id"}],
+                    }
+                ],
+            }
+        )
+
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+        apply_filters_mock = MagicMock(return_value=df_result.head(2))
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_join_from_results", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch(
+                "easyweaver.queries.operations.binding.resolve_distinct_bindings",
+                new=AsyncMock(return_value=distinct_filters),
+            ),
+            patch(
+                "easyweaver.queries.operations.binding.resolve_row_pair_bindings",
+                new=AsyncMock(return_value=None),
+            ),
+            patch("easyweaver.queries.operations.filter.apply_filters", apply_filters_mock),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_join_results_inline(run_id, request)
+
+        apply_filters_mock.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_group_by_applied_in_join_results(self):
+        """group_by is applied in join results execution."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_join_results_inline
+        from easyweaver.queries.schemas import JoinResultsRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"category": ["A"], "total": [10]})
+
+        request = JoinResultsRequest.model_validate(
+            {
+                "left_run_id": _RUN_ID,
+                "right_run_id": _RUN_ID_2,
+                "join": {"join_type": "inner", "left_on": "id", "right_on": "id"},
+                "group_by": {
+                    "group_columns": ["category"],
+                    "aggregations": [{"column": "total", "function": "sum"}],
+                },
+            }
+        )
+
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        group_by_mock = MagicMock(return_value=df_result)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_join_from_results", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.queries.operations.group_by.apply_group_by", group_by_mock),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_join_results_inline(run_id, request)
+
+        group_by_mock.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_distinct_applied_in_join_results(self):
+        """distinct is applied in join results execution."""
+        import polars as pl
+        from easyweaver.queries.router import _execute_join_results_inline
+        from easyweaver.queries.schemas import JoinResultsRequest
+
+        run_id = str(uuid.uuid4())
+        df_result = pl.DataFrame({"id": [1, 2]})
+
+        request = JoinResultsRequest.model_validate(
+            {
+                "left_run_id": _RUN_ID,
+                "right_run_id": _RUN_ID_2,
+                "join": {"join_type": "inner", "left_on": "id", "right_on": "id"},
+                "distinct": {"enabled": True, "columns": ["id"]},
+            }
+        )
+
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = AsyncMock()
+        mock_redis.aclose = AsyncMock()
+        mock_semaphore = MagicMock()
+        mock_semaphore.__aenter__ = AsyncMock(return_value=None)
+        mock_semaphore.__aexit__ = AsyncMock(return_value=None)
+
+        distinct_mock = MagicMock(return_value=df_result)
+
+        with (
+            patch("easyweaver.queries.router.service.update_query_run", new=AsyncMock()),
+            patch("easyweaver.dependencies.get_meta_db", return_value=MagicMock()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=mock_semaphore),
+            patch("easyweaver.queries.executor.execute_join_from_results", new=AsyncMock(return_value=df_result)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.queries.operations.distinct.apply_distinct", distinct_mock),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6380"
+            mock_settings.query_timeout_seconds = 30
+            mock_settings.max_result_rows = 10_000
+
+            await _execute_join_results_inline(run_id, request)
+
+        distinct_mock.assert_called_once()

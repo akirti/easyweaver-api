@@ -362,3 +362,211 @@ class TestDistinctValuesEndpoint:
 
         assert resp.status_code == 200
         assert captured["limit"] == 5000
+
+
+# ---------------------------------------------------------------------------
+# GET /sources/{source_id}/schema/{table_name}
+# ---------------------------------------------------------------------------
+
+
+class TestGetTableSchemaEndpoint:
+    def test_returns_table_schema(self, client):
+        sid = str(uuid.uuid4())
+        source = _make_source(sid)
+        table_schema = {"columns": [{"name": "id", "type": "integer"}]}
+
+        mock_connector = MagicMock()
+        mock_connector.__aenter__ = AsyncMock(return_value=mock_connector)
+        mock_connector.__aexit__ = AsyncMock(return_value=None)
+        mock_connector.get_table_schema = AsyncMock(return_value=table_schema)
+
+        with patch("easyweaver.sources.router.service.get_source", new=AsyncMock(return_value=source)), \
+             patch("easyweaver.sources.router.service.get_source_credentials", return_value={"host": "h"}), \
+             patch("easyweaver.connectors.registry.get_connector", return_value=mock_connector):
+            resp = client.get(f"/sources/{sid}/schema/users")
+
+        assert resp.status_code == 200
+        assert resp.json() == table_schema
+
+    def test_passes_table_name_to_connector(self, client):
+        sid = str(uuid.uuid4())
+        source = _make_source(sid)
+        captured = {}
+
+        mock_connector = MagicMock()
+        mock_connector.__aenter__ = AsyncMock(return_value=mock_connector)
+        mock_connector.__aexit__ = AsyncMock(return_value=None)
+
+        async def capture_table(table_name):
+            captured["table"] = table_name
+            return {"columns": []}
+
+        mock_connector.get_table_schema = capture_table
+
+        with patch("easyweaver.sources.router.service.get_source", new=AsyncMock(return_value=source)), \
+             patch("easyweaver.sources.router.service.get_source_credentials", return_value={}), \
+             patch("easyweaver.connectors.registry.get_connector", return_value=mock_connector):
+            resp = client.get(f"/sources/{sid}/schema/my_table")
+
+        assert resp.status_code == 200
+        assert captured["table"] == "my_table"
+
+    def test_source_not_found_returns_404(self, client):
+        sid = str(uuid.uuid4())
+        from easyweaver.core.exceptions import NotFoundError
+
+        with patch(
+            "easyweaver.sources.router.service.get_source",
+            new=AsyncMock(side_effect=NotFoundError("DataSource", sid)),
+        ):
+            resp = client.get(f"/sources/{sid}/schema/users")
+
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /sources/{source_id}/preview/{table_name}
+# ---------------------------------------------------------------------------
+
+
+class TestPreviewTableEndpoint:
+    def test_returns_preview_rows(self, client):
+        sid = str(uuid.uuid4())
+        source = _make_source(sid)
+        preview_data = {"rows": [{"id": 1, "name": "Alice"}], "total": 1}
+
+        mock_connector = MagicMock()
+        mock_connector.__aenter__ = AsyncMock(return_value=mock_connector)
+        mock_connector.__aexit__ = AsyncMock(return_value=None)
+        mock_connector.preview_table = AsyncMock(return_value=preview_data)
+
+        with patch("easyweaver.sources.router.service.get_source", new=AsyncMock(return_value=source)), \
+             patch("easyweaver.sources.router.service.get_source_credentials", return_value={}), \
+             patch("easyweaver.connectors.registry.get_connector", return_value=mock_connector):
+            resp = client.get(f"/sources/{sid}/preview/users")
+
+        assert resp.status_code == 200
+        assert resp.json() == preview_data
+
+    def test_passes_table_name_to_preview(self, client):
+        sid = str(uuid.uuid4())
+        source = _make_source(sid)
+        captured = {}
+
+        mock_connector = MagicMock()
+        mock_connector.__aenter__ = AsyncMock(return_value=mock_connector)
+        mock_connector.__aexit__ = AsyncMock(return_value=None)
+
+        async def capture_preview(table_name):
+            captured["table"] = table_name
+            return {"rows": [], "total": 0}
+
+        mock_connector.preview_table = capture_preview
+
+        with patch("easyweaver.sources.router.service.get_source", new=AsyncMock(return_value=source)), \
+             patch("easyweaver.sources.router.service.get_source_credentials", return_value={}), \
+             patch("easyweaver.connectors.registry.get_connector", return_value=mock_connector):
+            resp = client.get(f"/sources/{sid}/preview/orders")
+
+        assert resp.status_code == 200
+        assert captured["table"] == "orders"
+
+    def test_source_not_found_returns_404(self, client):
+        sid = str(uuid.uuid4())
+        from easyweaver.core.exceptions import NotFoundError
+
+        with patch(
+            "easyweaver.sources.router.service.get_source",
+            new=AsyncMock(side_effect=NotFoundError("DataSource", sid)),
+        ):
+            resp = client.get(f"/sources/{sid}/preview/users")
+
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# POST /sources/upload
+# ---------------------------------------------------------------------------
+
+
+class TestUploadFileSourceEndpoint:
+    def test_unsupported_file_type_returns_400(self, client):
+        import io
+
+        resp = client.post(
+            "/sources/upload",
+            data={"name": "My File"},
+            files={"file": ("data.pdf", io.BytesIO(b"pdf content"), "application/pdf")},
+        )
+        assert resp.status_code == 400
+        assert "Unsupported file type" in resp.json()["detail"]
+
+    def test_valid_csv_upload_creates_source(self, client):
+        import io
+
+        source = _make_source(name="CSV Source")
+        mock_blob = MagicMock()
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_gcs = MagicMock()
+        mock_gcs._bucket = mock_bucket
+
+        with patch("easyweaver.sources.router.service.create_source", new=AsyncMock(return_value=source)), \
+             patch("easyweaver.storage.gcs_client.get_gcs_client", return_value=mock_gcs):
+            resp = client.post(
+                "/sources/upload",
+                data={"name": "CSV Source"},
+                files={"file": ("data.csv", io.BytesIO(b"id,name\n1,Alice"), "text/csv")},
+            )
+
+        assert resp.status_code == 201
+
+    def test_json_file_accepted(self, client):
+        import io
+
+        source = _make_source(name="JSON Source")
+        mock_blob = MagicMock()
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_gcs = MagicMock()
+        mock_gcs._bucket = mock_bucket
+
+        with patch("easyweaver.sources.router.service.create_source", new=AsyncMock(return_value=source)), \
+             patch("easyweaver.storage.gcs_client.get_gcs_client", return_value=mock_gcs):
+            resp = client.post(
+                "/sources/upload",
+                data={"name": "JSON Source"},
+                files={"file": ("data.json", io.BytesIO(b'[{"id": 1}]'), "application/json")},
+            )
+
+        assert resp.status_code == 201
+
+    def test_xlsx_file_accepted(self, client):
+        import io
+
+        source = _make_source(name="Excel Source")
+        mock_blob = MagicMock()
+        mock_bucket = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+        mock_gcs = MagicMock()
+        mock_gcs._bucket = mock_bucket
+
+        with patch("easyweaver.sources.router.service.create_source", new=AsyncMock(return_value=source)), \
+             patch("easyweaver.storage.gcs_client.get_gcs_client", return_value=mock_gcs):
+            resp = client.post(
+                "/sources/upload",
+                data={"name": "Excel Source"},
+                files={"file": ("data.xlsx", io.BytesIO(b"fake xlsx"), "application/vnd.openxmlformats")},
+            )
+
+        assert resp.status_code == 201
+
+    def test_file_without_extension_returns_400(self, client):
+        import io
+
+        resp = client.post(
+            "/sources/upload",
+            data={"name": "No Ext"},
+            files={"file": ("datafile", io.BytesIO(b"content"), "application/octet-stream")},
+        )
+        assert resp.status_code == 400
