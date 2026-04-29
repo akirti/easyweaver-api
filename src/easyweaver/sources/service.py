@@ -42,7 +42,7 @@ async def create_source(db: AsyncIOMotorDatabase, data: SourceCreate) -> DataSou
 async def update_source(
     db: AsyncIOMotorDatabase, source_id: uuid.UUID, data: SourceUpdate
 ) -> DataSource:
-    source = await get_source(db, source_id)
+    _source = await get_source(db, source_id)
     updates: dict = {"updated_at": datetime.now(timezone.utc)}
     if data.name is not None:
         updates["name"] = data.name

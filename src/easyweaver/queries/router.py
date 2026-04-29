@@ -2,6 +2,7 @@ import asyncio
 import csv
 import io
 import uuid
+from typing import Annotated
 
 import structlog
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
@@ -141,7 +142,7 @@ async def _execute_inline(run_id: str, request: QueryRequest):
 
 
 @router.post("/execute", response_model=QueryRunResponse, status_code=202)
-async def execute_query(request: QueryRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def execute_query(request: QueryRequest, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]):
     run = await service.create_query_run(db, request)
     # Execute inline as a background task (no Celery needed for dev)
     asyncio.create_task(_execute_inline(str(run.id), request))
@@ -149,22 +150,22 @@ async def execute_query(request: QueryRequest, db: AsyncIOMotorDatabase = Depend
 
 
 @router.get("/runs/{run_id}", response_model=QueryRunResponse)
-async def get_query_run(run_id: uuid.UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def get_query_run(run_id: uuid.UUID, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]):
     return await service.get_query_run(db, run_id)
 
 
 @router.get("/runs/{run_id}/results", response_model=QueryResultsResponse)
 async def get_query_results(
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
     run_id: uuid.UUID,
     page: int = 1,
     page_size: int = 50,
     sort_column: str | None = None,
     sort_direction: str | None = None,
-    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     from easyweaver.results.redis_store import RedisResultStore
 
-    redis = await get_redis()
+    redis = get_redis()
     store = RedisResultStore(redis)
 
     run = await service.get_query_run(db, run_id)
@@ -202,24 +203,24 @@ async def get_query_results(
 
 
 @router.post("/runs/{run_id}/cancel")
-async def cancel_query(run_id: uuid.UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def cancel_query(run_id: uuid.UUID, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]):
     run = await service.update_query_run(db, run_id, status="cancelled")
     return {"status": "cancelled", "id": str(run.id)}
 
 
 @router.get("/runs/{run_id}/export")
 async def export_results(
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
     run_id: uuid.UUID,
     format: str = "csv",
-    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     from easyweaver.results.redis_store import RedisResultStore
     from easyweaver.settings import settings
 
-    redis = await get_redis()
+    redis = get_redis()
     store = RedisResultStore(redis)
 
-    run = await service.get_query_run(db, run_id)
+    _run = await service.get_query_run(db, run_id)
     df = await store.get_result(str(run_id))
     if df is None:
         from easyweaver.core.exceptions import NotFoundError
@@ -340,7 +341,7 @@ async def _execute_join_results_inline(run_id: str, request: JoinResultsRequest)
 @router.post("/join-results", response_model=QueryRunResponse, status_code=202)
 async def join_results(
     request: JoinResultsRequest,
-    db: AsyncIOMotorDatabase = Depends(get_db),
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
 ):
     """Join two previously-executed result sets."""
     from easyweaver.core.exceptions import ValidationError as EWValidationError
@@ -373,8 +374,8 @@ async def join_results(
 @router.websocket("/run/ws")
 async def run_query_ws(
     websocket: WebSocket,
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
     token: str | None = None,
-    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """WebSocket endpoint for real-time query execution with progress updates.
 
@@ -402,7 +403,7 @@ async def run_query_ws(
 @router.websocket("/ws/{run_id}")
 async def query_progress_ws(websocket: WebSocket, run_id: str):
     await websocket.accept()
-    redis = await get_redis()
+    redis = get_redis()
     pubsub = redis.pubsub()
     channel = f"query_progress:{run_id}"
     await pubsub.subscribe(channel)

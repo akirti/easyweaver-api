@@ -898,7 +898,9 @@ class TestRunExecution:
             mock_settings.query_timeout_seconds = 30
             mock_settings.max_result_rows = 10_000
 
-            await handler._run_execution(request)
+            import asyncio as _asyncio2
+            with pytest.raises(_asyncio2.CancelledError):
+                await handler._run_execution(request)
 
         sent = [c[0][0] for c in handler.ws.send_json.call_args_list]
         cancelled_msgs = [m for m in sent if m.get("type") == "cancelled"]

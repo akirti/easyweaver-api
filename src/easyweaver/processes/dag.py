@@ -57,7 +57,7 @@ def detect_cycles(dag: dict[str, list[str]]) -> None:
     Uses iterative DFS with white/gray/black colouring.
     """
     WHITE, GRAY, BLACK = 0, 1, 2
-    color: dict[str, int] = {node: WHITE for node in dag}
+    color: dict[str, int] = dict.fromkeys(dag, WHITE)
 
     for start in dag:
         if color[start] != WHITE:
@@ -102,7 +102,7 @@ def topological_sort(dag: dict[str, list[str]]) -> list[list[str]]:
         return []
 
     # Build in-degree map (only counting edges within the DAG)
-    in_degree: dict[str, int] = {node: 0 for node in dag}
+    in_degree: dict[str, int] = dict.fromkeys(dag, 0)
     for node, deps in dag.items():
         for dep in deps:
             if dep in dag:

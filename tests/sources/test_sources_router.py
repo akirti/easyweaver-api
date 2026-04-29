@@ -298,7 +298,7 @@ class TestGetSchemaEndpoint:
 
         with patch("easyweaver.sources.router.service.get_source", new=AsyncMock(return_value=source)), \
              patch("easyweaver.sources.router.service.get_source_credentials", return_value={"host": "h"}), \
-             patch("easyweaver.sources.router.get_redis", new=AsyncMock(return_value=mock_redis)), \
+             patch("easyweaver.sources.router.get_redis", return_value=mock_redis), \
              patch("easyweaver.connectors.registry.get_connector", return_value=mock_connector):
             resp = client.get(f"/sources/{sid}/schema")
 
@@ -312,7 +312,7 @@ class TestGetSchemaEndpoint:
         mock_redis = AsyncMock()
         mock_redis.get = AsyncMock(return_value=json.dumps(cached_schema))
 
-        with patch("easyweaver.sources.router.get_redis", new=AsyncMock(return_value=mock_redis)):
+        with patch("easyweaver.sources.router.get_redis", return_value=mock_redis):
             resp = client.get(f"/sources/{sid}/schema")
 
         assert resp.status_code == 200

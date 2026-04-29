@@ -111,13 +111,13 @@ class QueryWebSocketHandler:
             self._run_execution(request)
         )
 
-    async def _handle_pause(self, msg: dict) -> None:
+    async def _handle_pause(self, _msg: dict) -> None:
         self.control["paused"] = True
         if self.run_id:
             await service.update_query_run_progress(self.db, self.run_id, control=self.control)
         await self._send({"type": "paused"})
 
-    async def _handle_resume(self, msg: dict) -> None:
+    async def _handle_resume(self, _msg: dict) -> None:
         self.control["paused"] = False
         if self.run_id:
             await service.update_query_run_progress(self.db, self.run_id, control=self.control)
@@ -134,7 +134,7 @@ class QueryWebSocketHandler:
         self.control["batch_size_override"] = None
         await self._send({"type": "target_seconds_set", "target_seconds": self.control["target_batch_seconds"]})
 
-    async def _handle_cancel(self, msg: dict) -> None:
+    async def _handle_cancel(self, _msg: dict) -> None:
         self.control["cancelled"] = True
         if self.run_id:
             await service.update_query_run_progress(self.db, self.run_id, control=self.control)
@@ -327,6 +327,7 @@ class QueryWebSocketHandler:
             logger.info("query_cancelled_ws", run_id=run_id)
             await service.update_query_run(db, run_id, status="cancelled")
             await self._send({"type": "cancelled", "run_id": run_id})
+            raise
 
         except asyncio.TimeoutError:
             msg = f"Query timed out after {settings.query_timeout_seconds}s"

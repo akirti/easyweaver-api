@@ -54,7 +54,7 @@ async def init_db():
     )
 
 
-async def shutdown_db():
+def shutdown_db():
     global motor_client, _meta_db
     if motor_client:
         motor_client.close()
@@ -89,12 +89,12 @@ def get_meta_db() -> AsyncIOMotorDatabase:
     return _meta_db
 
 
-async def get_db() -> AsyncIOMotorDatabase:
+def get_db() -> AsyncIOMotorDatabase:
     """FastAPI dependency that provides the motor database."""
     assert _meta_db is not None, "MongoDB not initialized"
     return _meta_db
 
 
-async def get_redis() -> Redis:
+def get_redis() -> Redis:
     assert redis_client is not None, "Redis not initialized"
     return redis_client

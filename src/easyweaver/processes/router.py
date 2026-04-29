@@ -89,7 +89,7 @@ async def get_run_results(
 ):
     from easyweaver.results.redis_store import RedisResultStore
 
-    redis = await get_redis()
+    redis = get_redis()
     store = RedisResultStore(redis)
 
     run = await service.get_process_run(db, run_id)
@@ -128,7 +128,7 @@ async def save_results_to_gcp(
 ):
     from easyweaver.results.redis_store import RedisResultStore
 
-    redis = await get_redis()
+    redis = get_redis()
     store = RedisResultStore(redis)
 
     run = await service.get_process_run(db, run_id)
@@ -200,7 +200,7 @@ async def reload_results_from_gcp(
 ):
     from easyweaver.results.redis_store import RedisResultStore
 
-    redis = await get_redis()
+    redis = get_redis()
     store = RedisResultStore(redis)
 
     run = await service.get_process_run(db, run_id)

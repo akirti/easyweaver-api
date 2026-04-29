@@ -861,7 +861,9 @@ class TestRunExecution:
                 mock_settings.query_timeout_seconds = 60
                 mock_settings.max_result_rows = 10000
 
-                await handler._run_execution(config, {}, max_rows=1000, save_to_gcp=False, config_source="mongodb")
+                import asyncio as _asyncio2
+                with pytest.raises(_asyncio2.CancelledError):
+                    await handler._run_execution(config, {}, max_rows=1000, save_to_gcp=False, config_source="mongodb")
 
         sent_msgs = [c[0][0] for c in handler.ws.send_json.call_args_list]
         cancelled_msgs = [m for m in sent_msgs if m.get("type") == "cancelled"]

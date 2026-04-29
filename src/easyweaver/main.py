@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Redis not available at startup", error=str(e))
     yield
     await shutdown_redis()
-    await shutdown_db()
+    shutdown_db()
     logger.info("EasyWeaver shut down")
 
 

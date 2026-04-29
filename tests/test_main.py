@@ -159,7 +159,7 @@ class TestLifespan:
         with patch("easyweaver.main.init_db", new_callable=AsyncMock) as mock_init_db:
             with patch("easyweaver.main.init_redis", new_callable=AsyncMock) as mock_init_redis:
                 with patch("easyweaver.main.shutdown_redis", new_callable=AsyncMock):
-                    with patch("easyweaver.main.shutdown_db", new_callable=AsyncMock):
+                    with patch("easyweaver.main.shutdown_db") as _mock_shutdown_db:
                         mock_init_db.side_effect = Exception("MongoDB not reachable")
                         mock_init_redis.return_value = None
 
@@ -177,7 +177,7 @@ class TestLifespan:
         with patch("easyweaver.main.init_db", new_callable=AsyncMock) as mock_init_db:
             with patch("easyweaver.main.init_redis", new_callable=AsyncMock) as mock_init_redis:
                 with patch("easyweaver.main.shutdown_redis", new_callable=AsyncMock):
-                    with patch("easyweaver.main.shutdown_db", new_callable=AsyncMock):
+                    with patch("easyweaver.main.shutdown_db") as _mock_shutdown_db:
                         mock_init_db.return_value = None
                         mock_init_redis.side_effect = Exception("Redis not reachable")
 
@@ -195,7 +195,7 @@ class TestLifespan:
         with patch("easyweaver.main.init_db", new_callable=AsyncMock):
             with patch("easyweaver.main.init_redis", new_callable=AsyncMock):
                 with patch("easyweaver.main.shutdown_redis", new_callable=AsyncMock) as mock_shutdown_redis:
-                    with patch("easyweaver.main.shutdown_db", new_callable=AsyncMock) as mock_shutdown_db:
+                    with patch("easyweaver.main.shutdown_db") as mock_shutdown_db:
                         async with lifespan(app):
                             pass
 
@@ -213,7 +213,7 @@ class TestLifespan:
         with patch("easyweaver.main.init_db", new_callable=AsyncMock) as mock_init_db:
             with patch("easyweaver.main.init_redis", new_callable=AsyncMock) as mock_init_redis:
                 with patch("easyweaver.main.shutdown_redis", new_callable=AsyncMock):
-                    with patch("easyweaver.main.shutdown_db", new_callable=AsyncMock):
+                    with patch("easyweaver.main.shutdown_db") as _mock_shutdown_db:
                         async with lifespan(app):
                             pass
 

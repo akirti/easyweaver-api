@@ -675,7 +675,7 @@ class TestGetRunResults:
 
         with (
             patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
-            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.processes.router.get_redis", return_value=mock_redis),
             patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
         ):
             result = await router.get_run_results(str(run.id), db=db)
@@ -697,7 +697,7 @@ class TestGetRunResults:
 
         with (
             patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
-            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.processes.router.get_redis", return_value=mock_redis),
             patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
         ):
             result = await router.get_run_results(str(run.id), db=db)
@@ -719,7 +719,7 @@ class TestGetRunResults:
 
         with (
             patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
-            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.processes.router.get_redis", return_value=mock_redis),
             patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
             patch("easyweaver.queries.executor.paginate_dataframe", return_value=([{"id": 1}], 3)),
         ):
@@ -743,7 +743,7 @@ class TestGetRunResults:
 
         with (
             patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
-            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.processes.router.get_redis", return_value=mock_redis),
             patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
             patch("easyweaver.queries.executor.apply_sort", return_value=df) as mock_sort,
             patch("easyweaver.queries.executor.paginate_dataframe", return_value=([{"id": 1}], 3)),
@@ -776,7 +776,7 @@ class TestSaveResultsToGcp:
             patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
             patch.object(router.service, "save_results_to_gcp", return_value="gs://bucket/path"),
             patch.object(router.service, "update_process_run", AsyncMock()),
-            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.processes.router.get_redis", return_value=mock_redis),
             patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
         ):
             result = await router.save_results_to_gcp(str(run.id), db=db)
@@ -798,7 +798,7 @@ class TestSaveResultsToGcp:
 
         with (
             patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
-            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.processes.router.get_redis", return_value=mock_redis),
             patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
         ):
             with pytest.raises(NotFoundError):
@@ -826,7 +826,7 @@ class TestReloadResultsFromGcp:
         with (
             patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
             patch.object(router.service, "load_results_from_gcp", return_value=df),
-            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.processes.router.get_redis", return_value=mock_redis),
             patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
         ):
             result = await router.reload_results_from_gcp(str(run.id), db=db)
@@ -847,7 +847,7 @@ class TestReloadResultsFromGcp:
 
         with (
             patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
-            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.processes.router.get_redis", return_value=mock_redis),
             patch("easyweaver.results.redis_store.RedisResultStore", MagicMock()),
         ):
             with pytest.raises(NotFoundError):

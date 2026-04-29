@@ -1,5 +1,6 @@
 import json
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -19,42 +20,42 @@ router = APIRouter()
 
 
 @router.get("", response_model=list[SourceResponse])
-async def list_sources(db: AsyncIOMotorDatabase = Depends(get_db)):
+async def list_sources(db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]):
     sources = await service.list_sources(db)
     return sources
 
 
 @router.post("", response_model=SourceResponse, status_code=201)
-async def create_source(data: SourceCreate, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def create_source(data: SourceCreate, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]):
     return await service.create_source(db, data)
 
 
 @router.get("/{source_id}", response_model=SourceResponse)
-async def get_source(source_id: uuid.UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def get_source(source_id: uuid.UUID, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]):
     return await service.get_source(db, source_id)
 
 
 @router.put("/{source_id}", response_model=SourceResponse)
 async def update_source(
-    source_id: uuid.UUID, data: SourceUpdate, db: AsyncIOMotorDatabase = Depends(get_db)
+    source_id: uuid.UUID, data: SourceUpdate, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
     return await service.update_source(db, source_id, data)
 
 
 @router.delete("/{source_id}", status_code=204)
-async def delete_source(source_id: uuid.UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def delete_source(source_id: uuid.UUID, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]):
     await service.delete_source(db, source_id)
 
 
 @router.post("/{source_id}/test", response_model=ConnectionTestResponse)
-async def test_connection(source_id: uuid.UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def test_connection(source_id: uuid.UUID, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]):
     result = await service.test_source_connection(db, source_id)
     return result
 
 
 @router.get("/{source_id}/schema")
-async def get_schema(source_id: uuid.UUID, db: AsyncIOMotorDatabase = Depends(get_db)):
-    redis = await get_redis()
+async def get_schema(source_id: uuid.UUID, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]):
+    redis = get_redis()
     cache_key = f"schema:{source_id}"
     cached = await redis.get(cache_key)
     if cached:
@@ -74,7 +75,7 @@ async def get_schema(source_id: uuid.UUID, db: AsyncIOMotorDatabase = Depends(ge
 
 @router.get("/{source_id}/schema/{table_name}")
 async def get_table_schema(
-    source_id: uuid.UUID, table_name: str, db: AsyncIOMotorDatabase = Depends(get_db)
+    source_id: uuid.UUID, table_name: str, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
     source = await service.get_source(db, source_id)
     creds = service.get_source_credentials(source)
@@ -87,7 +88,7 @@ async def get_table_schema(
 
 @router.get("/{source_id}/preview/{table_name}")
 async def preview_table(
-    source_id: uuid.UUID, table_name: str, db: AsyncIOMotorDatabase = Depends(get_db)
+    source_id: uuid.UUID, table_name: str, db: Annotated[AsyncIOMotorDatabase, Depends(get_db)]
 ):
     source = await service.get_source(db, source_id)
     creds = service.get_source_credentials(source)
@@ -100,11 +101,11 @@ async def preview_table(
 
 @router.get("/{source_id}/tables/{table:path}/columns/{column}/distinct")
 async def get_column_distinct_values(
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
     source_id: uuid.UUID,
     table: str,
     column: str,
     limit: int = 500,
-    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     if limit > 5000:
         limit = 5000
@@ -124,9 +125,9 @@ _EXTENSION_TO_FORMAT = {".csv": "csv", ".json": "json", ".xlsx": "xlsx", ".xls":
 
 @router.post("/upload", response_model=SourceResponse, status_code=201)
 async def upload_file_source(
+    db: Annotated[AsyncIOMotorDatabase, Depends(get_db)],
     name: str = Form(...),
     file: UploadFile = File(...),
-    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     filename = file.filename or "data.csv"
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""

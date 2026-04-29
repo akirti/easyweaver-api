@@ -6,7 +6,7 @@ import structlog
 logger = structlog.get_logger()
 
 _COL_REF_RE = re.compile(r"\{(\w[\w.]*)\}")
-_ALLOWED_MATH_RE = re.compile(r"^[\d\s\+\-\*/\(\)\.\{\}\w]+$")
+_ALLOWED_MATH_RE = re.compile(r"^[\s\+\-\*/\(\)\.\{\}\w]+$")
 
 
 def apply_derived_columns(df: pl.DataFrame, specs: list[dict]) -> pl.DataFrame:

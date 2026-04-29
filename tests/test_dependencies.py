@@ -57,17 +57,15 @@ class TestGetDb:
     def setup_method(self):
         _reset_globals()
 
-    @pytest.mark.anyio
-    async def test_raises_when_not_initialized(self):
+    def test_raises_when_not_initialized(self):
         deps._meta_db = None
         with pytest.raises(AssertionError, match="MongoDB not initialized"):
-            await deps.get_db()
+            deps.get_db()
 
-    @pytest.mark.anyio
-    async def test_returns_db_when_initialized(self):
+    def test_returns_db_when_initialized(self):
         mock_db = MagicMock()
         deps._meta_db = mock_db
-        result = await deps.get_db()
+        result = deps.get_db()
         assert result is mock_db
 
 
@@ -101,17 +99,15 @@ class TestGetRedis:
     def setup_method(self):
         _reset_globals()
 
-    @pytest.mark.anyio
-    async def test_raises_when_not_initialized(self):
+    def test_raises_when_not_initialized(self):
         deps.redis_client = None
         with pytest.raises(AssertionError, match="Redis not initialized"):
-            await deps.get_redis()
+            deps.get_redis()
 
-    @pytest.mark.anyio
-    async def test_returns_client_when_initialized(self):
+    def test_returns_client_when_initialized(self):
         mock_redis = MagicMock()
         deps.redis_client = mock_redis
-        result = await deps.get_redis()
+        result = deps.get_redis()
         assert result is mock_redis
 
 
@@ -188,24 +184,22 @@ class TestShutdownDb:
     def setup_method(self):
         _reset_globals()
 
-    @pytest.mark.anyio
-    async def test_closes_motor_client(self):
+    def test_closes_motor_client(self):
         mock_client = MagicMock()
         mock_client.close = MagicMock()
         deps.motor_client = mock_client
         deps._meta_db = MagicMock()
 
-        await deps.shutdown_db()
+        deps.shutdown_db()
 
         mock_client.close.assert_called_once()
         assert deps.motor_client is None
         assert deps._meta_db is None
 
-    @pytest.mark.anyio
-    async def test_noop_when_already_none(self):
+    def test_noop_when_already_none(self):
         deps.motor_client = None
         # Should not raise
-        await deps.shutdown_db()
+        deps.shutdown_db()
 
 
 # ---------------------------------------------------------------------------

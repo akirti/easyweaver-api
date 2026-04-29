@@ -145,7 +145,7 @@ class Settings(BaseSettings):
                 else:
                     self.mongo_url = f"{scheme}://{host}"
             else:
-                self.mongo_url = "mongodb://easyweaver:easyweaver@localhost:27018"
+                self.mongo_url = os.environ.get("EASYWEAVER_MONGO_URL", "mongodb://localhost:27018")
 
 
 settings = Settings()

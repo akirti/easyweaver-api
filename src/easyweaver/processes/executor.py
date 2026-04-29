@@ -73,26 +73,26 @@ def coerce_param_values(param_values: dict, param_defs: dict) -> dict:
             if isinstance(value, str):
                 coerced[name] = value.lower() in ("true", "1", "yes")
         elif ptype == "select":
-            # Leave as-is (string value selected from options)
-            pass
+            # Leave as-is: string value selected from options; no coercion needed
+            coerced[name] = value
         elif ptype == "multi_select":
             # Ensure value is a list
             if isinstance(value, list):
-                pass  # already a list
+                coerced[name] = value  # already a list
             elif isinstance(value, str):
                 coerced[name] = [v.strip() for v in value.split(",") if v.strip()]
             else:
                 coerced[name] = [value]
         elif ptype == "boolean_yesno":
             if isinstance(value, bool):
-                pass
+                coerced[name] = value  # already a bool; no coercion needed
             elif isinstance(value, str):
                 coerced[name] = value.lower() in ("yes",)
             else:
                 coerced[name] = bool(value)
         elif ptype == "boolean_truefalse":
             if isinstance(value, bool):
-                pass
+                coerced[name] = value  # already a bool; no coercion needed
             elif isinstance(value, str):
                 coerced[name] = value.lower() in ("true",)
             else:

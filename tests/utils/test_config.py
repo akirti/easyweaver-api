@@ -298,7 +298,7 @@ class TestGetConfigByPath:
 
 
 # ---------------------------------------------------------------------------
-# ConfigurationLoader.get_DB_config
+# ConfigurationLoader.get_db_config
 # ---------------------------------------------------------------------------
 
 
@@ -315,7 +315,7 @@ class TestGetDBConfig:
                 "main": {"db_info": {"host": "h", "port": 5432}}
             }
         }
-        result = self.loader.get_DB_config("main")
+        result = self.loader.get_db_config("main")
         assert result["host"] == "h"
 
     def test_get_db_config_with_dot_info_key(self):
@@ -324,7 +324,7 @@ class TestGetDBConfig:
                 "main": {"db.info": {"host": "h2", "port": 5433}}
             }
         }
-        result = self.loader.get_DB_config("main")
+        result = self.loader.get_db_config("main")
         assert result["host"] == "h2"
 
     def test_get_db_config_flat_structure(self):
@@ -333,12 +333,12 @@ class TestGetDBConfig:
                 "main": {"host": "flat-host"}
             }
         }
-        result = self.loader.get_DB_config("main")
+        result = self.loader.get_db_config("main")
         assert result["host"] == "flat-host"
 
     def test_get_db_config_missing_returns_none(self):
         self.loader.configuration = {"databases": {}}
-        assert self.loader.get_DB_config("nonexistent") is None
+        assert self.loader.get_db_config("nonexistent") is None
 
     def test_get_config_by_token(self):
         self.loader.configuration = {

@@ -64,16 +64,21 @@ class DictUtil:
     ) -> Any:
         """Get deeply nested value with list support"""
         keys = key_path.split(OS_PROPERTY_SEPRATOR)
+
+        def _step(d: Any, key: str) -> Any:
+            if isinstance(d, list):
+                return [
+                    item.get(key)
+                    for sublist in d
+                    for item in (sublist if isinstance(sublist, list) else [sublist])
+                    if isinstance(item, dict)
+                ]
+            if isinstance(d, dict):
+                return d.get(key)
+            return default
+
         try:
-            return reduce(
-                lambda d, key: (
-                    [item.get(key) for sublist in d for item in (sublist if isinstance(sublist, list) else [sublist]) if isinstance(item, dict)]
-                    if isinstance(d, list) else d.get(key)
-                    if isinstance(d, dict) else default
-                ),
-                keys,
-                dictionary
-            )
+            return reduce(_step, keys, dictionary)
         except AttributeError:
             return None
 

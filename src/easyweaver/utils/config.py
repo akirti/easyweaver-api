@@ -285,14 +285,13 @@ class ConfigurationLoader:
         values_lookup.update(localenv_resolved_values)  # localenv hardcoded override simulator
         values_lookup.update(env_overrides)         # OS env vars (highest)
 
-        # e) Resolve any {placeholders} within localenv itself, re-flatten,
-        #    then re-apply env overrides so OS vars always win
+        # e) Resolve any {placeholders} within localenv itself, re-flatten
         localenv_config = self._resolve_placeholders(localenv_raw, values_lookup)
         localenv_flat_resolved = self._flatten_to_dot_paths(localenv_config)
         values_lookup.update(localenv_flat_resolved)
-        values_lookup.update(env_overrides)         # OS env vars still win
 
-        # f) Resolve {environment}.json from values dict
+        # f) Resolve {environment}.json from values dict, then re-apply env
+        #    overrides so OS vars always win over both localenv and env_config
         env_config = self._resolve_placeholders(env_raw, values_lookup)
         env_flat = self._flatten_to_dot_paths(env_config)
         values_lookup.update(env_flat)
@@ -329,7 +328,6 @@ class ConfigurationLoader:
     def _apply_env_vars(self) -> None:
         """Apply environment variables to configuration"""
         prefix = f"{self.env_prefix}_"
-        sep = OS_PROPERTY_SEPRATOR
 
         for key, value in os.environ.items():
             if key.startswith(prefix):
@@ -392,7 +390,7 @@ class ConfigurationLoader:
         )
         return result if result is not None else default
 
-    def get_DB_config(self, token: str) -> Optional[Dict[str, Any]]:
+    def get_db_config(self, token: str) -> Optional[Dict[str, Any]]:
         """Get database configuration by token"""
         config = self.get_config_by_path(f"databases.{token}")
         if config and 'db.info' in config:
