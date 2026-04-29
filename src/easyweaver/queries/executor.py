@@ -1,15 +1,27 @@
 import asyncio
+import time
 from typing import Any
 
 import polars as pl
 
 from easyweaver.connectors.registry import get_connector
+from easyweaver.processes.batch_adapter import adapt_batch_size
 from easyweaver.queries.schemas import QuerySourceConfig, JoinConfig
 from easyweaver.sources.models import DataSource
 from easyweaver.sources.service import get_source_credentials
 
 
 _MAX_CROSS_DATASET_VALUES = 10_000
+
+
+# ---------------------------------------------------------------------------
+# Progress helper
+# ---------------------------------------------------------------------------
+
+async def _emit(callback, event_type: str, **data) -> None:
+    """Fire a progress callback if one is provided."""
+    if callback is not None:
+        await callback(event_type, **data)
 
 
 async def _resolve_value_from(store, value_from: dict) -> list:
@@ -85,6 +97,114 @@ async def execute_single_source(
             limit=effective_limit,
         )
     return pl.DataFrame(rows) if rows else pl.DataFrame()
+
+
+async def execute_single_source_batched(
+    source: DataSource,
+    config: QuerySourceConfig,
+    row_limit: int | None = None,
+    progress_callback=None,
+    control: dict | None = None,
+) -> pl.DataFrame:
+    """Execute a single-source query with batched fetching and progress callbacks.
+
+    Falls back to ``execute_single_source`` when the connector does not support
+    batching.
+    """
+    from easyweaver.settings import settings
+
+    effective_limit = row_limit or settings.max_result_rows
+
+    creds = get_source_credentials(source)
+    connector = get_connector(source.source_type, creds)
+
+    if not connector.supports_batching:
+        df = await execute_single_source(source, config, row_limit=effective_limit)
+        await _emit(progress_callback, "fetch_complete", dataset="query", total_rows=len(df))
+        return df
+
+    # Batched fetch path
+    ctrl = control or {}
+    target_seconds = ctrl.get("target_batch_seconds", 10.0)
+    adaptive_enabled = ctrl.get("adaptive_enabled", True)
+    batch_size = 10_000
+
+    filter_dicts = [f.model_dump() for f in config.filters] if config.filters else []
+    all_rows: list[dict] = []
+    batch_number = 0
+    offset = 0
+    last_key: Any = None
+
+    async with connector:
+        while True:
+            # Check control flags
+            if ctrl.get("cancelled", False):
+                raise asyncio.CancelledError("Query cancelled by user")
+
+            while ctrl.get("paused", False):
+                await asyncio.sleep(0.5)
+                if ctrl.get("cancelled", False):
+                    raise asyncio.CancelledError("Query cancelled by user")
+
+            effective_batch_size = ctrl.get("batch_size_override") or batch_size
+            batch_number += 1
+            t0 = time.monotonic()
+
+            rows, has_more, last_key = await connector.execute_query_batched(
+                table=config.table,
+                columns=config.columns,
+                filters=filter_dicts,
+                filter_logic=config.filter_logic,
+                batch_size=effective_batch_size,
+                offset=offset,
+                last_key=last_key,
+            )
+
+            batch_time = time.monotonic() - t0
+            all_rows.extend(rows)
+            offset += len(rows)
+
+            await _emit(
+                progress_callback,
+                "fetch_progress",
+                dataset="query",
+                rows_fetched=len(all_rows),
+                batch_number=batch_number,
+                batch_size=effective_batch_size,
+                batch_time_ms=round(batch_time * 1000),
+                status="fetching",
+            )
+
+            if not has_more or not rows:
+                break
+
+            # Enforce row limit
+            if len(all_rows) >= effective_limit:
+                break
+
+            # Adaptive batch sizing
+            if adaptive_enabled and not ctrl.get("batch_size_override"):
+                max_remaining = effective_limit - len(all_rows)
+                old_batch_size = batch_size
+                batch_size = adapt_batch_size(
+                    effective_batch_size,
+                    batch_time,
+                    target_seconds,
+                    max_remaining,
+                )
+                if batch_size != old_batch_size:
+                    await _emit(
+                        progress_callback,
+                        "batch_adjusted",
+                        dataset="query",
+                        old_batch_size=old_batch_size,
+                        new_batch_size=batch_size,
+                        reason="adaptive",
+                    )
+
+    df = pl.DataFrame(all_rows[:effective_limit]) if all_rows else pl.DataFrame()
+    await _emit(progress_callback, "fetch_complete", dataset="query", total_rows=len(df))
+    return df
 
 
 async def execute_join(
