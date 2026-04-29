@@ -46,3 +46,18 @@ async def update_query_run(
         updates["error"] = error
     await db.query_runs.update_one({"_id": rid}, {"$set": updates})
     return await get_query_run(db, rid)
+
+
+async def update_query_run_progress(
+    db: AsyncIOMotorDatabase,
+    run_id: str,
+    progress: dict | None = None,
+    control: dict | None = None,
+) -> None:
+    """Update progress/control fields without returning the full doc (for perf)."""
+    updates: dict = {"updated_at": datetime.now(timezone.utc)}
+    if progress is not None:
+        updates["progress"] = progress
+    if control is not None:
+        updates["control"] = control
+    await db.query_runs.update_one({"_id": run_id}, {"$set": updates})

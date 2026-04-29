@@ -10,6 +10,8 @@ class QueryRun:
     status: str = "pending"
     row_count: int | None = None
     error: str | None = None
+    progress: dict | None = None
+    control: dict | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -22,6 +24,8 @@ class QueryRun:
             status=doc.get("status", "pending"),
             row_count=doc.get("row_count"),
             error=doc.get("error"),
+            progress=doc.get("progress"),
+            control=doc.get("control"),
             created_at=doc.get("created_at", datetime.now(timezone.utc)),
             updated_at=doc.get("updated_at", datetime.now(timezone.utc)),
         )
@@ -34,6 +38,8 @@ class QueryRun:
             "status": self.status,
             "row_count": self.row_count,
             "error": self.error,
+            "progress": self.progress,
+            "control": self.control,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

@@ -197,6 +197,7 @@ class QueryRunResponse(BaseModel):
     status: Literal["pending", "running", "completed", "failed", "cancelled"]
     row_count: int | None = None
     error: str | None = None
+    progress: dict | None = None
     created_at: datetime
     updated_at: datetime
 
