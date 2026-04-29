@@ -130,9 +130,6 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = _get("environment.cors.origins", ["http://localhost:5173"])
 
-    # PostgreSQL (kept as EW_ env var -- not in JSON config pipeline)
-    database_url: str = "postgresql+asyncpg://easyweaver:easyweaver@localhost:5432/easyweaver"
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Build mongo_url from config if not set via env var

@@ -11,9 +11,6 @@ fastapi = "^0.115.0"
 uvicorn = {extras = ["standard"], version = "^0.34.0"}
 pydantic = {extras = ["email"], version = "^2.12.5"}
 pydantic-settings = "^2.7.0"
-sqlalchemy = {extras = ["asyncio"], version = "^2.0.36"}
-asyncpg = "^0.30.0"
-alembic = "^1.14.0"
 motor = "^3.6.0"
 polars = "^1.18.0"
 pyarrow = "^18.1.0"
