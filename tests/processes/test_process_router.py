@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import polars as pl
 import pytest
 
 from easyweaver.processes.models import ProcessConfiguration, ProcessRun
@@ -654,3 +656,550 @@ class TestConfigToResponseImmutability:
         _config_to_response(config)
         # Original should still have the credentials
         assert config.config["queries"]["s"]["q"]["encrypted_credentials"] == original_creds
+
+
+# ── GET /runs/{run_id}/results ────────────────────────────────────────────────
+
+
+class TestGetRunResults:
+    @pytest.mark.anyio
+    async def test_returns_empty_when_run_not_completed(self):
+        from easyweaver.processes import router
+
+        run = _make_run(status="running")
+        db = _make_mock_db()
+
+        mock_store = MagicMock()
+        mock_store.get_result = AsyncMock(return_value=None)
+        mock_redis = MagicMock()
+
+        with (
+            patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
+            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+        ):
+            result = await router.get_run_results(str(run.id), db=db)
+
+        assert result.total == 0
+        assert result.columns == []
+
+    @pytest.mark.anyio
+    async def test_returns_empty_when_result_not_in_redis(self):
+        from easyweaver.processes import router
+
+        run = _make_run(status="completed")
+        run.result_run_id = "result-123"
+        db = _make_mock_db()
+
+        mock_store = MagicMock()
+        mock_store.get_result = AsyncMock(return_value=None)
+        mock_redis = MagicMock()
+
+        with (
+            patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
+            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+        ):
+            result = await router.get_run_results(str(run.id), db=db)
+
+        assert result.total == 0
+
+    @pytest.mark.anyio
+    async def test_returns_paginated_results(self):
+        from easyweaver.processes import router
+
+        run = _make_run(status="completed")
+        run.result_run_id = "result-xyz"
+        db = _make_mock_db()
+
+        df = pl.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]})
+        mock_store = MagicMock()
+        mock_store.get_result = AsyncMock(return_value=df)
+        mock_redis = MagicMock()
+
+        with (
+            patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
+            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("easyweaver.queries.executor.paginate_dataframe", return_value=([{"id": 1}], 3)),
+        ):
+            result = await router.get_run_results(str(run.id), db=db, page=1, page_size=50)
+
+        assert result.total == 3
+        assert len(result.columns) == 2
+
+    @pytest.mark.anyio
+    async def test_applies_sort_when_column_specified(self):
+        from easyweaver.processes import router
+
+        run = _make_run(status="completed")
+        run.result_run_id = "result-xyz"
+        db = _make_mock_db()
+
+        df = pl.DataFrame({"id": [3, 1, 2]})
+        mock_store = MagicMock()
+        mock_store.get_result = AsyncMock(return_value=df)
+        mock_redis = MagicMock()
+
+        with (
+            patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
+            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("easyweaver.queries.executor.apply_sort", return_value=df) as mock_sort,
+            patch("easyweaver.queries.executor.paginate_dataframe", return_value=([{"id": 1}], 3)),
+        ):
+            await router.get_run_results(
+                str(run.id), db=db, sort_column="id", sort_direction="asc"
+            )
+
+        mock_sort.assert_called_once()
+
+
+# ── POST /runs/{run_id}/save-results ─────────────────────────────────────────
+
+
+class TestSaveResultsToGcp:
+    @pytest.mark.anyio
+    async def test_saves_and_updates_run(self):
+        from easyweaver.processes import router
+
+        run = _make_run(status="completed")
+        run.result_run_id = "result-abc"
+        db = _make_mock_db()
+
+        df = pl.DataFrame({"id": [1, 2]})
+        mock_store = MagicMock()
+        mock_store.get_result = AsyncMock(return_value=df)
+        mock_redis = MagicMock()
+
+        with (
+            patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
+            patch.object(router.service, "save_results_to_gcp", return_value="gs://bucket/path"),
+            patch.object(router.service, "update_process_run", AsyncMock()),
+            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+        ):
+            result = await router.save_results_to_gcp(str(run.id), db=db)
+
+        assert result["gcp_path"] == "gs://bucket/path"
+
+    @pytest.mark.anyio
+    async def test_raises_not_found_when_no_df(self):
+        from easyweaver.processes import router
+        from easyweaver.core.exceptions import NotFoundError
+
+        run = _make_run(status="completed")
+        run.result_run_id = "result-abc"
+        db = _make_mock_db()
+
+        mock_store = MagicMock()
+        mock_store.get_result = AsyncMock(return_value=None)
+        mock_redis = MagicMock()
+
+        with (
+            patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
+            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+        ):
+            with pytest.raises(NotFoundError):
+                await router.save_results_to_gcp(str(run.id), db=db)
+
+
+# ── POST /runs/{run_id}/reload ────────────────────────────────────────────────
+
+
+class TestReloadResultsFromGcp:
+    @pytest.mark.anyio
+    async def test_reloads_df_and_stores_in_redis(self):
+        from easyweaver.processes import router
+
+        run = _make_run(status="completed")
+        run.result_gcp_path = "gs://bucket/result.parquet"
+        run.result_run_id = "result-xyz"
+        db = _make_mock_db()
+
+        df = pl.DataFrame({"x": [1, 2, 3]})
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+
+        with (
+            patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
+            patch.object(router.service, "load_results_from_gcp", return_value=df),
+            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+        ):
+            result = await router.reload_results_from_gcp(str(run.id), db=db)
+
+        assert result["row_count"] == 3
+        mock_store.store_result.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_raises_not_found_when_no_gcp_path(self):
+        from easyweaver.processes import router
+        from easyweaver.core.exceptions import NotFoundError
+
+        run = _make_run(status="completed")
+        run.result_gcp_path = ""
+        db = _make_mock_db()
+
+        mock_redis = MagicMock()
+
+        with (
+            patch.object(router.service, "get_process_run", AsyncMock(return_value=run)),
+            patch("easyweaver.processes.router.get_redis", AsyncMock(return_value=mock_redis)),
+            patch("easyweaver.results.redis_store.RedisResultStore", MagicMock()),
+        ):
+            with pytest.raises(NotFoundError):
+                await router.reload_results_from_gcp(str(run.id), db=db)
+
+
+# ── POST /{config_id}/refresh-credentials ────────────────────────────────────
+
+
+class TestRefreshCredentials:
+    @pytest.mark.anyio
+    async def test_calls_service_and_returns_config(self):
+        from easyweaver.processes import router
+
+        config = _make_config("Refreshed Config")
+        db = _make_mock_db()
+
+        with patch.object(
+            router.service, "refresh_process_credentials", AsyncMock(return_value=config)
+        ):
+            result = await router.refresh_credentials(str(config.id), db=db)
+
+        assert result["name"] == "Refreshed Config"
+        assert result["id"] == str(config.id)
+
+
+# ── _execute_process_inline (background task) ─────────────────────────────────
+
+
+def _make_inline_config(save_destination="redis", gcp_path=""):
+    """Make a config for _execute_process_inline tests."""
+    now = datetime.now(timezone.utc)
+    return ProcessConfiguration(
+        id=uuid.uuid4(),
+        user_id="system",
+        name="Inline Config",
+        description="",
+        version=1,
+        config={"queries": {}, "logics": []},
+        params={},
+        save_destination=save_destination,
+        gcp_path=gcp_path,
+        tags=[],
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _make_semaphore():
+    """Create an async semaphore that works as a context manager."""
+    import asyncio
+    return asyncio.Semaphore(1)
+
+
+class TestExecuteProcessInline:
+    @pytest.mark.anyio
+    async def test_successful_execution_updates_run_completed(self):
+        from easyweaver.processes import router, service as svc
+
+        run_id = str(uuid.uuid4())
+        config_id = str(uuid.uuid4())
+        config = _make_inline_config()
+        df = pl.DataFrame({"id": [1, 2, 3]})
+
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+
+        mock_update = AsyncMock()
+
+        with (
+            patch.object(svc, "update_process_run", mock_update),
+            patch.object(svc, "get_configuration", AsyncMock(return_value=config)),
+            patch("easyweaver.dependencies.get_meta_db", return_value=_make_mock_db()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("asyncio.wait_for", AsyncMock(return_value=df)),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6379"
+            mock_settings.query_timeout_seconds = 60
+            mock_settings.max_result_rows = 10000
+
+            await router._execute_process_inline(
+                run_id, config_id, {}, save_to_gcp=False, max_rows=1000
+            )
+
+        all_calls = mock_update.call_args_list
+        assert any("completed" in str(c) for c in all_calls)
+
+    @pytest.mark.anyio
+    async def test_timeout_updates_run_failed(self):
+        import asyncio as _asyncio
+        from easyweaver.processes import router, service as svc
+
+        run_id = str(uuid.uuid4())
+        config_id = str(uuid.uuid4())
+        config = _make_inline_config()
+
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+        mock_update = AsyncMock()
+
+        with (
+            patch.object(svc, "update_process_run", mock_update),
+            patch.object(svc, "get_configuration", AsyncMock(return_value=config)),
+            patch("easyweaver.dependencies.get_meta_db", return_value=_make_mock_db()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.results.redis_store.RedisResultStore", MagicMock()),
+            patch("asyncio.wait_for", AsyncMock(side_effect=_asyncio.TimeoutError())),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6379"
+            mock_settings.query_timeout_seconds = 1
+            mock_settings.max_result_rows = 10000
+
+            await router._execute_process_inline(
+                run_id, config_id, {}, save_to_gcp=False, max_rows=1000
+            )
+
+        assert any("failed" in str(c) for c in mock_update.call_args_list)
+
+    @pytest.mark.anyio
+    async def test_exception_updates_run_failed(self):
+        from easyweaver.processes import router, service as svc
+
+        run_id = str(uuid.uuid4())
+        config_id = str(uuid.uuid4())
+
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+        mock_update = AsyncMock()
+
+        with (
+            patch.object(svc, "update_process_run", mock_update),
+            patch.object(svc, "get_configuration", AsyncMock(side_effect=RuntimeError("DB error"))),
+            patch("easyweaver.dependencies.get_meta_db", return_value=_make_mock_db()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.results.redis_store.RedisResultStore", MagicMock()),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6379"
+            mock_settings.query_timeout_seconds = 60
+            mock_settings.max_result_rows = 10000
+
+            await router._execute_process_inline(
+                run_id, config_id, {}, save_to_gcp=False, max_rows=1000
+            )
+
+        assert any("failed" in str(c) for c in mock_update.call_args_list)
+
+    @pytest.mark.anyio
+    async def test_save_to_gcp_path(self):
+        from easyweaver.processes import router, service as svc
+
+        run_id = str(uuid.uuid4())
+        config_id = str(uuid.uuid4())
+        config = _make_inline_config()
+        run = _make_run(status="pending")
+
+        df = pl.DataFrame({"id": [1]})
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+        mock_update = AsyncMock()
+        mock_save_gcp = MagicMock(return_value="gs://path/results.parquet")
+
+        with (
+            patch.object(svc, "update_process_run", mock_update),
+            patch.object(svc, "get_configuration", AsyncMock(return_value=config)),
+            patch.object(svc, "get_process_run", AsyncMock(return_value=run)),
+            patch.object(svc, "save_results_to_gcp", mock_save_gcp),
+            patch("easyweaver.dependencies.get_meta_db", return_value=_make_mock_db()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("asyncio.wait_for", AsyncMock(return_value=df)),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6379"
+            mock_settings.query_timeout_seconds = 60
+            mock_settings.max_result_rows = 10000
+
+            await router._execute_process_inline(
+                run_id, config_id, {}, save_to_gcp=True, max_rows=1000
+            )
+
+        mock_save_gcp.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_gcp_source_loads_from_gcp(self):
+        from easyweaver.processes import router, service as svc
+
+        run_id = str(uuid.uuid4())
+        config_id = str(uuid.uuid4())
+        config = _make_inline_config(save_destination="gcp", gcp_path="conf/path.json")
+
+        df = pl.DataFrame({"x": [1]})
+        gcp_doc = {
+            "config": {"queries": {}, "logics": []},
+            "params": {},
+        }
+
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+        mock_update = AsyncMock()
+        mock_load_gcp = MagicMock(return_value=gcp_doc)
+
+        with (
+            patch.object(svc, "update_process_run", mock_update),
+            patch.object(svc, "get_configuration", AsyncMock(return_value=config)),
+            patch.object(svc, "load_config_from_gcp", mock_load_gcp),
+            patch("easyweaver.dependencies.get_meta_db", return_value=_make_mock_db()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("asyncio.wait_for", AsyncMock(return_value=df)),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6379"
+            mock_settings.query_timeout_seconds = 60
+            mock_settings.max_result_rows = 10000
+
+            await router._execute_process_inline(
+                run_id, config_id, {}, save_to_gcp=False, config_source="auto", max_rows=1000
+            )
+
+        mock_load_gcp.assert_called_once_with(config.gcp_path)
+
+    @pytest.mark.anyio
+    async def test_gcp_load_fallback_when_auto_and_gcp_fails(self):
+        """When config_source='auto' and GCP load fails, fall back to MongoDB."""
+        from easyweaver.processes import router, service as svc
+
+        run_id = str(uuid.uuid4())
+        config_id = str(uuid.uuid4())
+        config = _make_inline_config(save_destination="gcp", gcp_path="conf/path.json")
+
+        df = pl.DataFrame({"x": [1]})
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+        mock_update = AsyncMock()
+        mock_load_gcp = MagicMock(side_effect=RuntimeError("GCS unavailable"))
+
+        with (
+            patch.object(svc, "update_process_run", mock_update),
+            patch.object(svc, "get_configuration", AsyncMock(return_value=config)),
+            patch.object(svc, "load_config_from_gcp", mock_load_gcp),
+            patch("easyweaver.dependencies.get_meta_db", return_value=_make_mock_db()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("asyncio.wait_for", AsyncMock(return_value=df)),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6379"
+            mock_settings.query_timeout_seconds = 60
+            mock_settings.max_result_rows = 10000
+
+            await router._execute_process_inline(
+                run_id, config_id, {}, save_to_gcp=False, config_source="auto", max_rows=1000
+            )
+
+        # Should have completed (fell back to MongoDB)
+        assert any("completed" in str(c) for c in mock_update.call_args_list)
+
+    @pytest.mark.anyio
+    async def test_row_limit_enforced_in_inline(self):
+        """Rows exceeding max_rows should be trimmed."""
+        from easyweaver.processes import router, service as svc
+
+        run_id = str(uuid.uuid4())
+        config_id = str(uuid.uuid4())
+        config = _make_inline_config()
+
+        df = pl.DataFrame({"id": list(range(500))})
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+        mock_update = AsyncMock()
+
+        with (
+            patch.object(svc, "update_process_run", mock_update),
+            patch.object(svc, "get_configuration", AsyncMock(return_value=config)),
+            patch("easyweaver.dependencies.get_meta_db", return_value=_make_mock_db()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("asyncio.wait_for", AsyncMock(return_value=df)),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6379"
+            mock_settings.query_timeout_seconds = 60
+            mock_settings.max_result_rows = 10000
+
+            await router._execute_process_inline(
+                run_id, config_id, {}, save_to_gcp=False, max_rows=100
+            )
+
+        # completed call should have row_count=100 (limited)
+        update_calls = mock_update.call_args_list
+        completed_call = next((c for c in update_calls if "completed" in str(c)), None)
+        assert completed_call is not None
+        assert "100" in str(completed_call)
+
+    @pytest.mark.anyio
+    async def test_gcs_results_save_failure_is_logged(self):
+        """GCS save_results failure during inline execution should not propagate."""
+        from easyweaver.processes import router, service as svc
+
+        run_id = str(uuid.uuid4())
+        config_id = str(uuid.uuid4())
+        config = _make_inline_config()
+        run = _make_run(status="pending")
+
+        df = pl.DataFrame({"id": [1]})
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+        mock_update = AsyncMock()
+
+        with (
+            patch.object(svc, "update_process_run", mock_update),
+            patch.object(svc, "get_configuration", AsyncMock(return_value=config)),
+            patch.object(svc, "get_process_run", AsyncMock(return_value=run)),
+            patch.object(svc, "save_results_to_gcp", MagicMock(side_effect=RuntimeError("GCS error"))),
+            patch("easyweaver.dependencies.get_meta_db", return_value=_make_mock_db()),
+            patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+            patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+            patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+            patch("asyncio.wait_for", AsyncMock(return_value=df)),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.redis_url = "redis://localhost:6379"
+            mock_settings.query_timeout_seconds = 60
+            mock_settings.max_result_rows = 10000
+
+            # Should not raise — GCS error is logged only
+            await router._execute_process_inline(
+                run_id, config_id, {}, save_to_gcp=True, max_rows=1000
+            )
+
+        # completed status should still be set
+        assert any("completed" in str(c) for c in mock_update.call_args_list)

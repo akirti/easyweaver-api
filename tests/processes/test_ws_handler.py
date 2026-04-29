@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import polars as pl
 import pytest
 
 from easyweaver.processes.models import ProcessConfiguration, ProcessRun
@@ -599,3 +600,496 @@ class TestDisconnection:
         await handler._broadcast({"type": "progress"})
 
         obs.send_json.assert_called_once()
+
+
+# ── Test: Pause/Resume with run_id and progress_tracker ──────────────
+
+
+class TestPauseResumeWithRunId:
+    @pytest.mark.asyncio
+    async def test_pause_calls_update_process_run_when_run_id_set(self):
+        handler = _make_handler()
+        handler.run_id = "run-123"
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+            await handler._handle_pause({})
+
+        mock_service.update_process_run.assert_called_once_with(
+            handler.db, "run-123", control=handler.control
+        )
+
+    @pytest.mark.asyncio
+    async def test_pause_calls_progress_tracker_when_set(self):
+        handler = _make_handler()
+        handler.run_id = "run-123"
+        mock_tracker = MagicMock()
+        mock_tracker.set_paused = AsyncMock()
+        handler._progress_tracker = mock_tracker
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+            await handler._handle_pause({})
+
+        mock_tracker.set_paused.assert_called_once_with(True)
+
+    @pytest.mark.asyncio
+    async def test_resume_calls_update_process_run_when_run_id_set(self):
+        handler = _make_handler()
+        handler.run_id = "run-456"
+        handler.control["paused"] = True
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+            await handler._handle_resume({})
+
+        mock_service.update_process_run.assert_called_once_with(
+            handler.db, "run-456", control=handler.control
+        )
+
+    @pytest.mark.asyncio
+    async def test_resume_calls_progress_tracker_when_set(self):
+        handler = _make_handler()
+        handler.run_id = "run-456"
+        handler.control["paused"] = True
+        mock_tracker = MagicMock()
+        mock_tracker.set_paused = AsyncMock()
+        handler._progress_tracker = mock_tracker
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+            await handler._handle_resume({})
+
+        mock_tracker.set_paused.assert_called_once_with(False)
+
+    @pytest.mark.asyncio
+    async def test_cancel_calls_update_process_run_when_run_id_set(self):
+        handler = _make_handler()
+        handler.run_id = "run-789"
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+            await handler._handle_cancel({})
+
+        mock_service.update_process_run.assert_called_once_with(
+            handler.db, "run-789", control=handler.control
+        )
+
+
+# ── Test: _progress_callback tracker branches ────────────────────────
+
+
+class TestProgressCallbackTrackerBranches:
+    @pytest.mark.asyncio
+    async def test_phase_event_calls_tracker_set_phase(self):
+        handler = _make_handler()
+        mock_tracker = MagicMock()
+        mock_tracker.set_phase = AsyncMock()
+        handler._progress_tracker = mock_tracker
+
+        await handler._progress_callback("phase", phase="fetching", phase_index=1)
+
+        mock_tracker.set_phase.assert_called_once_with("fetching", 1)
+
+    @pytest.mark.asyncio
+    async def test_fetch_started_calls_tracker_init_and_set_status(self):
+        handler = _make_handler()
+        mock_tracker = MagicMock()
+        mock_tracker.init_dataset = AsyncMock()
+        mock_tracker.set_dataset_status = AsyncMock()
+        handler._progress_tracker = mock_tracker
+
+        await handler._progress_callback("fetch_started", dataset="orders", depends_on=None)
+
+        mock_tracker.init_dataset.assert_called_once_with("orders", depends_on=None)
+        mock_tracker.set_dataset_status.assert_called_once_with("orders", "fetching")
+
+    @pytest.mark.asyncio
+    async def test_fetch_waiting_calls_tracker_init_and_set_status(self):
+        handler = _make_handler()
+        mock_tracker = MagicMock()
+        mock_tracker.init_dataset = AsyncMock()
+        mock_tracker.set_dataset_status = AsyncMock()
+        handler._progress_tracker = mock_tracker
+
+        await handler._progress_callback("fetch_waiting", dataset="customers", depends_on=["orders"])
+
+        mock_tracker.init_dataset.assert_called_once_with("customers", depends_on=["orders"])
+        mock_tracker.set_dataset_status.assert_called_once_with("customers", "waiting")
+
+    @pytest.mark.asyncio
+    async def test_fetch_progress_calls_tracker_update_dataset(self):
+        handler = _make_handler()
+        mock_tracker = MagicMock()
+        mock_tracker.update_dataset = AsyncMock()
+        handler._progress_tracker = mock_tracker
+
+        await handler._progress_callback(
+            "fetch_progress",
+            dataset="orders",
+            rows_fetched=500,
+            batch_number=2,
+            batch_size=250,
+        )
+
+        mock_tracker.update_dataset.assert_called_once_with(
+            "orders",
+            rows_fetched=500,
+            batch_number=2,
+            batch_size=250,
+            status="fetching",
+        )
+
+    @pytest.mark.asyncio
+    async def test_fetch_complete_calls_tracker_set_status_and_update(self):
+        handler = _make_handler()
+        mock_tracker = MagicMock()
+        mock_tracker.set_dataset_status = AsyncMock()
+        mock_tracker.update_dataset = AsyncMock()
+        handler._progress_tracker = mock_tracker
+
+        await handler._progress_callback("fetch_complete", dataset="orders", total_rows=1000)
+
+        mock_tracker.set_dataset_status.assert_called_once_with("orders", "completed")
+        mock_tracker.update_dataset.assert_called_once_with("orders", rows_fetched=1000)
+
+    @pytest.mark.asyncio
+    async def test_join_progress_calls_set_current_operation(self):
+        handler = _make_handler()
+        mock_tracker = MagicMock()
+        mock_tracker.set_current_operation = AsyncMock()
+        handler._progress_tracker = mock_tracker
+
+        await handler._progress_callback("join_progress", operation="join_step_1")
+
+        mock_tracker.set_current_operation.assert_called_once_with("join_step_1")
+
+    @pytest.mark.asyncio
+    async def test_transform_progress_calls_set_current_operation(self):
+        handler = _make_handler()
+        mock_tracker = MagicMock()
+        mock_tracker.set_current_operation = AsyncMock()
+        handler._progress_tracker = mock_tracker
+
+        await handler._progress_callback("transform_progress", operation="derived_columns")
+
+        mock_tracker.set_current_operation.assert_called_once_with("derived_columns")
+
+    @pytest.mark.asyncio
+    async def test_no_tracker_skips_tracking(self):
+        handler = _make_handler()
+        handler._progress_tracker = None
+
+        # Should not raise even with no tracker
+        await handler._progress_callback("phase", phase="fetching", phase_index=1)
+
+    @pytest.mark.asyncio
+    async def test_unrecognized_event_type_does_not_call_tracker(self):
+        handler = _make_handler()
+        mock_tracker = MagicMock()
+        mock_tracker.set_phase = AsyncMock()
+        mock_tracker.update_dataset = AsyncMock()
+        mock_tracker.set_current_operation = AsyncMock()
+        handler._progress_tracker = mock_tracker
+
+        # An unknown event type should not call any tracker methods
+        await handler._progress_callback("some_unknown_event", dataset="orders")
+
+        mock_tracker.set_phase.assert_not_called()
+        mock_tracker.update_dataset.assert_not_called()
+        mock_tracker.set_current_operation.assert_not_called()
+
+
+# ── Test: _run_execution (background execution task) ─────────────────
+
+
+class TestRunExecution:
+    @pytest.mark.asyncio
+    async def test_successful_execution_broadcasts_completed(self):
+        handler = _make_handler()
+        handler.run_id = "run-exec-1"
+        config = _make_config()
+
+        df = pl.DataFrame({"id": [1, 2, 3]})
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+
+            with (
+                patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+                patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+                patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+                patch("asyncio.wait_for", AsyncMock(return_value=df)),
+                patch("easyweaver.settings.settings") as mock_settings,
+            ):
+                mock_settings.redis_url = "redis://localhost:6379"
+                mock_settings.query_timeout_seconds = 60
+                mock_settings.max_result_rows = 10000
+
+                await handler._run_execution(config, {}, max_rows=1000, save_to_gcp=False, config_source="mongodb")
+
+        sent_msgs = [c[0][0] for c in handler.ws.send_json.call_args_list]
+        completed_msgs = [m for m in sent_msgs if m.get("type") == "completed"]
+        assert len(completed_msgs) == 1
+        assert completed_msgs[0]["total_rows"] == 3
+
+    @pytest.mark.asyncio
+    async def test_execution_cancelled_broadcasts_cancelled(self):
+        import asyncio as _asyncio
+        handler = _make_handler()
+        handler.run_id = "run-cancelled-1"
+        config = _make_config()
+
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+
+            with (
+                patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+                patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+                patch("easyweaver.results.redis_store.RedisResultStore", MagicMock()),
+                patch("asyncio.wait_for", AsyncMock(side_effect=_asyncio.CancelledError())),
+                patch("easyweaver.settings.settings") as mock_settings,
+            ):
+                mock_settings.redis_url = "redis://localhost:6379"
+                mock_settings.query_timeout_seconds = 60
+                mock_settings.max_result_rows = 10000
+
+                await handler._run_execution(config, {}, max_rows=1000, save_to_gcp=False, config_source="mongodb")
+
+        sent_msgs = [c[0][0] for c in handler.ws.send_json.call_args_list]
+        cancelled_msgs = [m for m in sent_msgs if m.get("type") == "cancelled"]
+        assert len(cancelled_msgs) == 1
+
+        # Should have updated DB with cancelled status
+        status_calls = [str(c) for c in mock_service.update_process_run.call_args_list]
+        assert any("cancelled" in s for s in status_calls)
+
+    @pytest.mark.asyncio
+    async def test_execution_timeout_broadcasts_error(self):
+        import asyncio as _asyncio
+        handler = _make_handler()
+        handler.run_id = "run-timeout-1"
+        config = _make_config()
+
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+
+            with (
+                patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+                patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+                patch("easyweaver.results.redis_store.RedisResultStore", MagicMock()),
+                patch("asyncio.wait_for", AsyncMock(side_effect=_asyncio.TimeoutError())),
+                patch("easyweaver.settings.settings") as mock_settings,
+            ):
+                mock_settings.redis_url = "redis://localhost:6379"
+                mock_settings.query_timeout_seconds = 1
+                mock_settings.max_result_rows = 10000
+
+                await handler._run_execution(config, {}, max_rows=1000, save_to_gcp=False, config_source="mongodb")
+
+        sent_msgs = [c[0][0] for c in handler.ws.send_json.call_args_list]
+        error_msgs = [m for m in sent_msgs if m.get("type") == "error"]
+        assert len(error_msgs) == 1
+        assert "timed out" in error_msgs[0]["error"]
+
+        status_calls = [str(c) for c in mock_service.update_process_run.call_args_list]
+        assert any("failed" in s for s in status_calls)
+
+    @pytest.mark.asyncio
+    async def test_execution_exception_broadcasts_error(self):
+        handler = _make_handler()
+        handler.run_id = "run-error-1"
+        config = _make_config()
+
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+
+            with (
+                patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+                patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+                patch("easyweaver.results.redis_store.RedisResultStore", MagicMock()),
+                patch("asyncio.wait_for", AsyncMock(side_effect=RuntimeError("exec failure"))),
+                patch("easyweaver.settings.settings") as mock_settings,
+            ):
+                mock_settings.redis_url = "redis://localhost:6379"
+                mock_settings.query_timeout_seconds = 60
+                mock_settings.max_result_rows = 10000
+
+                await handler._run_execution(config, {}, max_rows=1000, save_to_gcp=False, config_source="mongodb")
+
+        sent_msgs = [c[0][0] for c in handler.ws.send_json.call_args_list]
+        error_msgs = [m for m in sent_msgs if m.get("type") == "error"]
+        assert len(error_msgs) == 1
+        assert "exec failure" in error_msgs[0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_execution_unregisters_from_active_handlers(self):
+        from easyweaver.processes.ws_handler import _active_handlers
+
+        handler = _make_handler()
+        handler.run_id = "run-unreg-1"
+        _active_handlers["run-unreg-1"] = handler
+
+        config = _make_config()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+
+            with (
+                patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+                patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+                patch("easyweaver.results.redis_store.RedisResultStore", MagicMock()),
+                patch("asyncio.wait_for", AsyncMock(side_effect=RuntimeError("fail"))),
+                patch("easyweaver.settings.settings") as mock_settings,
+            ):
+                mock_settings.redis_url = "redis://localhost:6379"
+                mock_settings.query_timeout_seconds = 60
+                mock_settings.max_result_rows = 10000
+
+                await handler._run_execution(config, {}, max_rows=1000, save_to_gcp=False, config_source="mongodb")
+
+        assert "run-unreg-1" not in _active_handlers
+
+    @pytest.mark.asyncio
+    async def test_execution_uses_gcp_source_when_config_source_is_gcp(self):
+        handler = _make_handler()
+        handler.run_id = "run-gcp-src"
+
+        now = datetime.now(timezone.utc)
+        config = ProcessConfiguration(
+            id=uuid.uuid4(),
+            user_id="system",
+            name="GCP Config",
+            description="",
+            version=1,
+            config={"queries": {}, "logics": []},
+            params={},
+            save_destination="gcp",
+            gcp_path="conf/path.json",
+            tags=[],
+            created_at=now,
+            updated_at=now,
+        )
+
+        df = pl.DataFrame({"x": [1]})
+        gcp_doc = {"config": {"queries": {}, "logics": []}, "params": {}}
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+            mock_service.load_config_from_gcp = MagicMock(return_value=gcp_doc)
+
+            with (
+                patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+                patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+                patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+                patch("asyncio.wait_for", AsyncMock(return_value=df)),
+                patch("easyweaver.settings.settings") as mock_settings,
+            ):
+                mock_settings.redis_url = "redis://localhost:6379"
+                mock_settings.query_timeout_seconds = 60
+                mock_settings.max_result_rows = 10000
+
+                await handler._run_execution(config, {}, max_rows=1000, save_to_gcp=False, config_source="gcp")
+
+        mock_service.load_config_from_gcp.assert_called_once_with(config.gcp_path)
+
+    @pytest.mark.asyncio
+    async def test_execution_with_save_to_gcp(self):
+        handler = _make_handler()
+        handler.run_id = "run-save-gcp"
+        config = _make_config()
+        run = _make_run()
+
+        df = pl.DataFrame({"id": [1]})
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+        mock_save_gcp = MagicMock(return_value="gs://results/path.parquet")
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+            mock_service.get_process_run = AsyncMock(return_value=run)
+            mock_service.save_results_to_gcp = mock_save_gcp
+
+            with (
+                patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+                patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+                patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+                patch("asyncio.wait_for", AsyncMock(return_value=df)),
+                patch("easyweaver.settings.settings") as mock_settings,
+            ):
+                mock_settings.redis_url = "redis://localhost:6379"
+                mock_settings.query_timeout_seconds = 60
+                mock_settings.max_result_rows = 10000
+
+                await handler._run_execution(config, {}, max_rows=1000, save_to_gcp=True, config_source="mongodb")
+
+        mock_save_gcp.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_execution_enforces_row_limit(self):
+        handler = _make_handler()
+        handler.run_id = "run-row-limit"
+        config = _make_config()
+
+        df = pl.DataFrame({"id": list(range(500))})
+        mock_store = MagicMock()
+        mock_store.store_result = AsyncMock()
+        mock_redis = MagicMock()
+        mock_redis.aclose = AsyncMock()
+
+        stored_df = None
+
+        async def capture_store(key, data, **kwargs):
+            nonlocal stored_df
+            stored_df = data
+
+        mock_store.store_result = capture_store
+
+        with patch("easyweaver.processes.ws_handler.service") as mock_service:
+            mock_service.update_process_run = AsyncMock()
+
+            with (
+                patch("easyweaver.dependencies.get_query_semaphore", return_value=_make_semaphore()),
+                patch("redis.asyncio.Redis.from_url", return_value=mock_redis),
+                patch("easyweaver.results.redis_store.RedisResultStore", return_value=mock_store),
+                patch("asyncio.wait_for", AsyncMock(return_value=df)),
+                patch("easyweaver.settings.settings") as mock_settings,
+            ):
+                mock_settings.redis_url = "redis://localhost:6379"
+                mock_settings.query_timeout_seconds = 60
+                mock_settings.max_result_rows = 10000
+
+                await handler._run_execution(config, {}, max_rows=100, save_to_gcp=False, config_source="mongodb")
+
+        # completed message should reflect the limited rows
+        sent_msgs = [c[0][0] for c in handler.ws.send_json.call_args_list]
+        completed_msgs = [m for m in sent_msgs if m.get("type") == "completed"]
+        assert len(completed_msgs) == 1
+        assert completed_msgs[0]["total_rows"] == 100
+
+
+def _make_semaphore():
+    """Create an async semaphore that works as a context manager."""
+    import asyncio
+    return asyncio.Semaphore(1)
