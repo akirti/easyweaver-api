@@ -1,0 +1,61 @@
+{
+  "query_run_doc": {
+    "_id": "12345678-1234-1234-1234-123456789abc",
+    "config": "{\"type\": \"single\", \"left\": {\"source_id\": \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\", \"table\": \"orders\", \"columns\": null, \"filters\": [], \"filter_logic\": \"and\"}}",
+    "status": "pending",
+    "row_count": null,
+    "error": null,
+    "progress": null,
+    "control": null,
+    "created_at": "2026-04-29T10:00:00+00:00",
+    "updated_at": "2026-04-29T10:00:00+00:00"
+  },
+  "query_run_doc_completed": {
+    "_id": "22345678-1234-1234-1234-123456789abc",
+    "config": "{\"type\": \"single\", \"left\": {\"source_id\": \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\", \"table\": \"orders\", \"columns\": null, \"filters\": [], \"filter_logic\": \"and\"}}",
+    "status": "completed",
+    "row_count": 3,
+    "error": null,
+    "progress": {"last_event": "fetch_complete", "total_rows": 3},
+    "control": {"paused": false, "cancelled": false},
+    "created_at": "2026-04-29T10:00:00+00:00",
+    "updated_at": "2026-04-29T10:01:00+00:00"
+  },
+  "query_request": {
+    "type": "single",
+    "left": {
+      "source_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "table": "orders",
+      "columns": null,
+      "filters": [],
+      "filter_logic": "and"
+    }
+  },
+  "join_request": {
+    "type": "join",
+    "left": {
+      "source_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "table": "orders",
+      "columns": null,
+      "filters": [],
+      "filter_logic": "and"
+    },
+    "right": {
+      "source_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "table": "customers",
+      "columns": null,
+      "filters": [],
+      "filter_logic": "and"
+    },
+    "join": {
+      "join_type": "inner",
+      "left_on": "customer_id",
+      "right_on": "id"
+    }
+  },
+  "sample_rows": [
+    {"id": 1, "name": "Alice", "amount": 100.0},
+    {"id": 2, "name": "Bob", "amount": 200.0},
+    {"id": 3, "name": "Charlie", "amount": 300.0}
+  ]
+}
