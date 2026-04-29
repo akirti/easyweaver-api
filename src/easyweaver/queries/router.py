@@ -370,6 +370,35 @@ async def join_results(
     return run
 
 
+@router.websocket("/run/ws")
+async def run_query_ws(
+    websocket: WebSocket,
+    token: str | None = None,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """WebSocket endpoint for real-time query execution with progress updates.
+
+    Requires a valid JWT token passed as a ``token`` query parameter.
+    Client sends a start message with the query request to begin execution.
+    """
+    from easyweaver.auth.service import decode_token
+    from easyweaver.core.exceptions import AuthenticationError
+    from easyweaver.queries.ws_handler import QueryWebSocketHandler
+
+    if not token:
+        await websocket.close(code=4003, reason="Forbidden: token required")
+        return
+
+    try:
+        decode_token(token)
+    except (AuthenticationError, Exception):
+        await websocket.close(code=4003, reason="Forbidden: invalid token")
+        return
+
+    handler = QueryWebSocketHandler(websocket, db)
+    await handler.handle()
+
+
 @router.websocket("/ws/{run_id}")
 async def query_progress_ws(websocket: WebSocket, run_id: str):
     await websocket.accept()
