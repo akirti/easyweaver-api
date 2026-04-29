@@ -1,0 +1,65 @@
+{
+  "config_id": "550e8400-e29b-41d4-a716-446655440000",
+  "source_id": "660e8400-e29b-41d4-a716-446655440001",
+  "snapshot_id": "770e8400-e29b-41d4-a716-446655440002",
+  "config_doc": {
+    "_id": "550e8400-e29b-41d4-a716-446655440000",
+    "user_id": "user-001",
+    "name": "Test Dashboard",
+    "source_id": "660e8400-e29b-41d4-a716-446655440001",
+    "tables": [
+      {
+        "table_name": "orders",
+        "timestamp_column": "updated_at",
+        "modified_by_column": "modified_by"
+      },
+      {
+        "table_name": "users",
+        "timestamp_column": null,
+        "modified_by_column": null
+      }
+    ],
+    "refresh_interval_minutes": 30,
+    "is_active": true,
+    "created_at": "2026-04-01T10:00:00+00:00",
+    "updated_at": "2026-04-01T10:00:00+00:00"
+  },
+  "source_doc": {
+    "_id": "660e8400-e29b-41d4-a716-446655440001",
+    "name": "Test PostgreSQL Source",
+    "source_type": "postgres",
+    "encrypted_credentials": "gAAAAAEncryptedBase64==",
+    "created_at": "2026-04-01T09:00:00+00:00",
+    "updated_at": "2026-04-01T09:00:00+00:00"
+  },
+  "snapshot_doc": {
+    "_id": "770e8400-e29b-41d4-a716-446655440002",
+    "config_id": "550e8400-e29b-41d4-a716-446655440000",
+    "source_id": "660e8400-e29b-41d4-a716-446655440001",
+    "table_name": "orders",
+    "row_count": 1234,
+    "stats": {
+      "row_count": 1234,
+      "size_bytes": 500000,
+      "column_count": 8,
+      "changes_1h": 10,
+      "changes_3h": 25,
+      "changes_24h": 100,
+      "last_modified_at": "2026-04-01T09:55:00+00:00",
+      "last_modified_by": "admin"
+    },
+    "captured_at": "2026-04-01T10:00:00+00:00"
+  },
+  "create_payload": {
+    "name": "My Dashboard",
+    "source_id": "660e8400-e29b-41d4-a716-446655440001",
+    "tables": [
+      {
+        "table_name": "orders",
+        "timestamp_column": "created_at",
+        "modified_by_column": null
+      }
+    ],
+    "refresh_interval_minutes": 60
+  }
+}
