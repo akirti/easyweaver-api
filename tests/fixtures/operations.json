@@ -1,0 +1,43 @@
+{
+  "filter_data": {
+    "sample_rows": [
+      {"name": "Alice", "age": 30, "city": "NYC", "active": true, "score": 85.5},
+      {"name": "Bob", "age": 25, "city": "LA", "active": false, "score": 92.0},
+      {"name": "Charlie", "age": 35, "city": "NYC", "active": true, "score": 78.3},
+      {"name": null, "age": 40, "city": null, "active": false, "score": null}
+    ]
+  },
+  "transform_data": {
+    "sample_rows": [
+      {"name": "  alice  ", "amount": 1234.567, "code": "00123", "text": "Hello World"},
+      {"name": "  bob  ", "amount": 999.1, "code": "00045", "text": "Foo Bar"}
+    ]
+  },
+  "group_by_data": {
+    "sample_rows": [
+      {"dept": "engineering", "name": "Alice", "salary": 100000},
+      {"dept": "engineering", "name": "Bob", "salary": 120000},
+      {"dept": "sales", "name": "Charlie", "salary": 80000},
+      {"dept": "sales", "name": "Diana", "salary": 90000},
+      {"dept": "sales", "name": "Eve", "salary": 85000}
+    ]
+  },
+  "derived_data": {
+    "sample_rows": [
+      {"first": "Alice", "last": "Smith", "price": 100, "qty": 5, "status": "active"},
+      {"first": "Bob", "last": "Jones", "price": 200, "qty": 3, "status": "inactive"}
+    ]
+  },
+  "join_data": {
+    "left_rows": [
+      {"id": 1, "name": "Alice"},
+      {"id": 2, "name": "Bob"},
+      {"id": 3, "name": "Charlie"}
+    ],
+    "right_rows": [
+      {"id": 1, "dept": "Engineering"},
+      {"id": 2, "dept": "Sales"},
+      {"id": 4, "dept": "Marketing"}
+    ]
+  }
+}
