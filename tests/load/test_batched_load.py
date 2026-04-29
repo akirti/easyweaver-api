@@ -298,30 +298,37 @@ class TestConcurrentExecutions:
         n_concurrent = 10
         errors: list[Exception] = []
 
-        async def _run_one(idx: int):
-            try:
-                connector = MockBatchConnector(total_rows=500, ncols=2)
-                config = _make_process_config(n_datasets=1)
-                with (
-                    patch("easyweaver.processes.executor.get_connector", return_value=connector),
-                    patch("easyweaver.core.security.decrypt_credentials", return_value='{"host":"x"}'),
-                    patch("easyweaver.settings.settings") as mock_settings,
-                ):
-                    mock_settings.max_result_rows = 1_000_000
-                    mock_settings.batch_min_size = 1_000
-                    mock_settings.batch_max_size = 100_000
+        # Patches must live outside the concurrent coroutines: applying
+        # patch() concurrently to the same target corrupts the module's
+        # attribute because each patch saves/restores independently and the
+        # restores race with each other.
+        connectors = [MockBatchConnector(total_rows=500, ncols=2) for _ in range(n_concurrent)]
+        configs = [_make_process_config(n_datasets=1) for _ in range(n_concurrent)]
+        connector_iter = iter(connectors)
 
+        with (
+            patch("easyweaver.processes.executor.get_connector", side_effect=lambda *a, **kw: next(connector_iter)),
+            patch("easyweaver.core.security.decrypt_credentials", return_value='{"host":"x"}'),
+            patch("easyweaver.settings.settings") as mock_settings,
+        ):
+            mock_settings.max_result_rows = 1_000_000
+            mock_settings.batch_min_size = 1_000
+            mock_settings.batch_max_size = 100_000
+
+            async def _run_one(idx: int):
+                try:
                     await execute_process(
-                        config,
+                        configs[idx],
                         param_values={},
                         db=None,
                         progress_callback=AsyncMock(),
                         control={"adaptive_enabled": False, "batch_size_override": 500},
                     )
-            except Exception as exc:
-                errors.append(exc)
+                except Exception as exc:
+                    errors.append(exc)
 
-        await asyncio.gather(*[_run_one(i) for i in range(n_concurrent)])
+            await asyncio.gather(*[_run_one(i) for i in range(n_concurrent)])
+
         assert len(errors) == 0, f"Errors in concurrent runs: {errors}"
 
 
