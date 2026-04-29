@@ -11,8 +11,6 @@ no params, no GCP.
 from __future__ import annotations
 
 import asyncio
-import uuid
-
 import structlog
 from fastapi import WebSocket, WebSocketDisconnect
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -41,7 +39,6 @@ class QueryWebSocketHandler:
             "cancelled": False,
         }
         self._execution_task: asyncio.Task | None = None
-        self._observers: list[WebSocket] = []
 
     # ── Public entry point ────────────────────────────────────────────
 
@@ -71,7 +68,7 @@ class QueryWebSocketHandler:
         msg_type = msg.get("type")
         handler_name = self._HANDLERS.get(msg_type)
         if handler_name is None:
-            await self._send({"type": "error", "error": f"Unknown message type: {msg_type}"})
+            await self._send({"type": "error", "message": f"Unknown message type: {msg_type}"})
             return
         handler = getattr(self, handler_name)
         await handler(msg)
@@ -82,7 +79,7 @@ class QueryWebSocketHandler:
         """Start a new query execution."""
         request_data = msg.get("request")
         if not request_data:
-            await self._send({"type": "error", "error": "'request' payload is required"})
+            await self._send({"type": "error", "message": "'request' payload is required"})
             return
 
         target_seconds = msg.get("target_batch_seconds")
@@ -92,7 +89,7 @@ class QueryWebSocketHandler:
         try:
             request = QueryRequest.model_validate(request_data)
         except Exception as exc:
-            await self._send({"type": "error", "error": f"Invalid QueryRequest: {exc}"})
+            await self._send({"type": "error", "message": f"Invalid QueryRequest: {exc}"})
             return
 
         run = await service.create_query_run(self.db, request)
@@ -154,18 +151,6 @@ class QueryWebSocketHandler:
         except Exception:
             pass  # Client may have disconnected
 
-    async def _broadcast(self, msg: dict) -> None:
-        """Send to primary WS and all observer WS connections."""
-        await self._send(msg)
-        dead: list[WebSocket] = []
-        for obs in self._observers:
-            try:
-                await obs.send_json(msg)
-            except Exception:
-                dead.append(obs)
-        for d in dead:
-            self._observers.remove(d)
-
     # ── Progress callback ─────────────────────────────────────────────
 
     async def _progress_callback(self, event_type: str, **data) -> None:
@@ -174,7 +159,7 @@ class QueryWebSocketHandler:
         Progress is persisted to MongoDB on key events so that clients can
         recover state after reconnection.
         """
-        await self._broadcast({"type": event_type, **data})
+        await self._send({"type": event_type, **data})
 
         # Persist progress on key events
         if event_type in ("fetch_complete", "completed", "error"):
@@ -196,7 +181,7 @@ class QueryWebSocketHandler:
 
     async def _run_execution(self, request: QueryRequest) -> None:
         """Background task that runs the query and sends completion/error."""
-        from easyweaver.dependencies import get_meta_db, get_query_semaphore
+        from easyweaver.dependencies import get_query_semaphore
         from easyweaver.queries.executor import (
             execute_single_source_batched,
             execute_join,
@@ -219,7 +204,7 @@ class QueryWebSocketHandler:
                 await service.update_query_run(db, run_id, status="running")
 
                 # Send phase event
-                await self._broadcast({
+                await self._send({
                     "type": "phase",
                     "phase": "fetching",
                     "phase_index": 1,
@@ -227,7 +212,7 @@ class QueryWebSocketHandler:
                 })
 
                 # Send fetch_started event
-                await self._broadcast({
+                await self._send({
                     "type": "fetch_started",
                     "dataset": "query",
                 })
@@ -325,7 +310,6 @@ class QueryWebSocketHandler:
                     df = df.head(settings.max_result_rows)
 
                 # Store result in Redis
-                result_run_id = str(uuid.uuid4())
                 await store.store_result(run_id, df)
 
                 await service.update_query_run(
@@ -333,7 +317,7 @@ class QueryWebSocketHandler:
                 )
                 logger.info("query_completed_ws", run_id=run_id, rows=len(df))
 
-                await self._broadcast({
+                await self._send({
                     "type": "completed",
                     "run_id": run_id,
                     "total_rows": len(df),
@@ -342,18 +326,18 @@ class QueryWebSocketHandler:
         except asyncio.CancelledError:
             logger.info("query_cancelled_ws", run_id=run_id)
             await service.update_query_run(db, run_id, status="cancelled")
-            await self._broadcast({"type": "cancelled", "run_id": run_id})
+            await self._send({"type": "cancelled", "run_id": run_id})
 
         except asyncio.TimeoutError:
             msg = f"Query timed out after {settings.query_timeout_seconds}s"
             logger.warning("query_timeout_ws", run_id=run_id)
             await service.update_query_run(db, run_id, status="failed", error=msg)
-            await self._broadcast({"type": "error", "run_id": run_id, "error": msg})
+            await self._send({"type": "error", "run_id": run_id, "message": msg})
 
         except Exception as e:
             logger.exception("query_execution_failed_ws", run_id=run_id, error=str(e))
             await service.update_query_run(db, run_id, status="failed", error=str(e))
-            await self._broadcast({"type": "error", "run_id": run_id, "error": str(e)})
+            await self._send({"type": "error", "run_id": run_id, "message": str(e)})
 
         finally:
             await redis.aclose()
