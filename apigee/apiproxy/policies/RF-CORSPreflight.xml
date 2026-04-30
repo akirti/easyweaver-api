@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RaiseFault async="false" continueOnError="false" enabled="true" name="RF-CORSPreflight">
+    <DisplayName>CORS Preflight Response</DisplayName>
+    <Properties/>
+    <FaultResponse>
+        <Set>
+            <Headers>
+                <!-- Use validated origin from JS-ValidateCORSOrigin instead of reflecting blindly -->
+                <Header name="Access-Control-Allow-Origin">{cors.allowed_origin}</Header>
+                <Header name="Access-Control-Allow-Methods">GET, POST, PUT, DELETE, PATCH, OPTIONS</Header>
+                <Header name="Access-Control-Allow-Headers">Origin, X-Requested-With, Content-Type, Accept, Authorization, X-API-Key, X-CSRF-Token, X-Forwarded-Host, X-Origin, X-Referer</Header>
+                <Header name="Access-Control-Allow-Credentials">true</Header>
+                <Header name="Access-Control-Max-Age">86400</Header>
+                <Header name="Vary">Origin</Header>
+            </Headers>
+            <Payload contentType="text/plain"/>
+            <StatusCode>200</StatusCode>
+            <ReasonPhrase>OK</ReasonPhrase>
+        </Set>
+    </FaultResponse>
+    <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+</RaiseFault>

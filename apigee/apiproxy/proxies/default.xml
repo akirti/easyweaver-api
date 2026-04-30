@@ -1,0 +1,441 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<ProxyEndpoint name="default">
+    <Description>Default Proxy Endpoint for EasyWeaver Aggregator API</Description>
+
+    <PreFlow name="PreFlow">
+        <Request>
+            <!-- Validate CORS origin against allowed list (runs for ALL requests including OPTIONS) -->
+            <Step>
+                <Name>JS-ValidateCORSOrigin</Name>
+            </Step>
+            <!-- CORS Preflight: return 200 with headers for valid origins -->
+            <Step>
+                <Name>RF-CORSPreflight</Name>
+                <Condition>request.verb == "OPTIONS" and cors.is_valid_origin == "true"</Condition>
+            </Step>
+            <!-- CORS Preflight: reject invalid origins with 403 -->
+            <Step>
+                <Name>RF-CORSInvalidOrigin</Name>
+                <Condition>request.verb == "OPTIONS" and cors.is_valid_origin != "true"</Condition>
+            </Step>
+            <!-- Retrieve credentials (hostname, JWT secret) from encrypted KVM - MUST run before JWT verification -->
+            <Step>
+                <Name>KVM-Get-Credentials</Name>
+                <Condition>request.verb != "OPTIONS" and !(proxy.pathsuffix JavaRegex "/(health|health/.*|info)")</Condition>
+            </Step>
+            <!-- Spike Arrest to prevent abuse (rate limit by client IP) -->
+            <Step>
+                <Name>SA-RateLimit</Name>
+                <Condition>!(proxy.pathsuffix JavaRegex "/(health|health/.*|info)")</Condition>
+            </Step>
+            <!-- Extract access_token from httpOnly cookie into Authorization header (for page-refresh flows) -->
+            <Step>
+                <Name>JS-ExtractCookieToken</Name>
+                <Condition>(proxy.pathsuffix != "" and proxy.pathsuffix != "/") and !(proxy.pathsuffix JavaRegex "/auth/(login|register|refresh)") and !(proxy.pathsuffix JavaRegex "/(health|health/.*|info)") and request.verb != "OPTIONS"</Condition>
+            </Step>
+            <!-- Validate JWT Token for protected endpoints -->
+            <Step>
+                <Name>JWT-VerifyAccessToken</Name>
+                <Condition>(proxy.pathsuffix != "" and proxy.pathsuffix != "/") and !(proxy.pathsuffix JavaRegex "/auth/(login|register|refresh)") and !(proxy.pathsuffix JavaRegex "/(health|health/.*|info)") and request.verb != "OPTIONS"</Condition>
+            </Step>
+            <!-- Quota enforcement (by JWT user or client IP) -->
+            <Step>
+                <Name>Q-EnforceQuota</Name>
+                <Condition>(proxy.pathsuffix != "" and proxy.pathsuffix != "/") and !(proxy.pathsuffix JavaRegex "/(health|health/.*|info|auth/.*)") and request.verb != "OPTIONS"</Condition>
+            </Step>
+        </Request>
+        <Response>
+            <!-- Add CORS headers to responses (only for validated origins) -->
+            <Step>
+                <Name>AM-AddCORSHeaders</Name>
+                <Condition>cors.is_valid_origin == "true"</Condition>
+            </Step>
+        </Response>
+    </PreFlow>
+
+    <Flows>
+        <!-- ==================== Authentication Endpoints ==================== -->
+        <Flow name="Auth-Login">
+            <Description>User login</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/auth/login") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Auth-Register">
+            <Description>User registration</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/auth/register") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Auth-Refresh">
+            <Description>Token refresh</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/auth/refresh") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Auth-Me">
+            <Description>Get current user profile</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/auth/me") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <!-- ==================== Sources Endpoints ==================== -->
+        <Flow name="Sources-List">
+            <Description>List all data sources</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/sources") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Sources-Create">
+            <Description>Create a new data source</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/sources") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Sources-Upload">
+            <Description>Upload a file-based data source</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/sources/upload") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Sources-Test">
+            <Description>Test a data source connection</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/sources/*/test") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Sources-Schema">
+            <Description>Get source schema (all tables)</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/sources/*/schema") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Sources-TableSchema">
+            <Description>Get schema for a specific table</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/sources/*/schema/*") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Sources-Preview">
+            <Description>Preview data from a table</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/sources/*/preview/*") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Sources-DistinctValues">
+            <Description>Get distinct values for a column</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/sources/*/tables/*/columns/*/distinct") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Sources-CRUD">
+            <Description>Source CRUD operations (get, update, delete)</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/sources/*")</Condition>
+        </Flow>
+
+        <!-- ==================== Queries Endpoints ==================== -->
+        <Flow name="Queries-Execute">
+            <Description>Execute a query</Description>
+            <Request>
+                <Step>
+                    <Name>JS-ValidateQueryRequest</Name>
+                </Step>
+            </Request>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/queries/execute") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Queries-JoinResults">
+            <Description>Join query results</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/queries/join-results") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <!-- NOTE: WebSocket endpoints /queries/run/ws and /queries/ws/{run_id}
+             require special handling. Standard Apigee proxies do not natively support
+             WebSocket upgrades. These endpoints may need:
+             1. A separate WebSocket-aware proxy/gateway (e.g., Envoy, NGINX)
+             2. Apigee X with gRPC/WebSocket support
+             3. Direct backend access bypassing Apigee for WS connections -->
+
+        <Flow name="Queries-RunResults">
+            <Description>Get query run results</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/queries/runs/*/results") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Queries-RunExport">
+            <Description>Export query run results</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/queries/runs/*/export") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Queries-RunCancel">
+            <Description>Cancel a running query</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/queries/runs/*/cancel") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Queries-RunStatus">
+            <Description>Get query run status</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/queries/runs/*") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <!-- ==================== Processes Endpoints ==================== -->
+        <Flow name="Processes-List">
+            <Description>List all saved processes</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Processes-Create">
+            <Description>Create a new process configuration</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Processes-RunResults">
+            <Description>Get process run results</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes/runs/*/results") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Processes-RunPreview">
+            <Description>Preview a dataset from a process run</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes/runs/*/preview/*") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Processes-RunSaveResults">
+            <Description>Save process run results</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes/runs/*/save-results") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Processes-RunReload">
+            <Description>Reload a process run</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes/runs/*/reload") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Processes-RunStatus">
+            <Description>Get process run status</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes/runs/*") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Processes-Run">
+            <Description>Run a process configuration</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes/*/run") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <!-- NOTE: WebSocket endpoint /processes/{config_id}/run/ws
+             requires special handling — see note under Queries endpoints -->
+
+        <Flow name="Processes-ConfigRuns">
+            <Description>List runs for a process configuration</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes/*/runs") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Processes-RefreshCredentials">
+            <Description>Refresh credentials for a process</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes/*/refresh-credentials") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Processes-CRUD">
+            <Description>Process CRUD operations (get, update, delete)</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/processes/*")</Condition>
+        </Flow>
+
+        <!-- ==================== Dashboard Endpoints ==================== -->
+        <Flow name="Dashboard-ConfigsList">
+            <Description>List dashboard configurations</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/dashboard/configs") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Dashboard-ConfigsCreate">
+            <Description>Create a dashboard configuration</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/dashboard/configs") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Dashboard-ConfigStats">
+            <Description>Get dashboard config statistics</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/dashboard/configs/*/stats") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Dashboard-ConfigHistory">
+            <Description>Get dashboard config history</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/dashboard/configs/*/history") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Dashboard-ConfigRefresh">
+            <Description>Refresh dashboard config data</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/dashboard/configs/*/refresh") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <Flow name="Dashboard-ConfigCRUD">
+            <Description>Dashboard config CRUD (get, update, delete)</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/dashboard/configs/*")</Condition>
+        </Flow>
+
+        <!-- ==================== Lookups Endpoints ==================== -->
+        <Flow name="Lookups-Get">
+            <Description>Get lookup data for a process</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/lookups/*") and (request.verb = "GET")</Condition>
+        </Flow>
+
+        <Flow name="Lookups-Refresh">
+            <Description>Refresh lookup data for a process</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/lookups/*/refresh") and (request.verb = "POST")</Condition>
+        </Flow>
+
+        <!-- ==================== Health Check Endpoints ==================== -->
+        <Flow name="Health">
+            <Description>Health check endpoint</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/health")</Condition>
+        </Flow>
+
+        <Flow name="Health-Sub">
+            <Description>Health sub-endpoints (live, ready)</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/health/*")</Condition>
+        </Flow>
+
+        <Flow name="Info">
+            <Description>Application info</Description>
+            <Request/>
+            <Response/>
+            <Condition>(proxy.pathsuffix MatchesPath "/info")</Condition>
+        </Flow>
+
+        <!-- Default catch-all: pass through to backend (let backend return 404 for unknown routes) -->
+        <Flow name="DefaultPassthrough">
+            <Description>Pass through to backend for any routes not explicitly handled above</Description>
+            <Request/>
+            <Response/>
+        </Flow>
+    </Flows>
+
+    <PostFlow name="PostFlow">
+        <Request/>
+        <Response>
+            <!-- Add security headers -->
+            <Step>
+                <Name>AM-AddSecurityHeaders</Name>
+            </Step>
+        </Response>
+    </PostFlow>
+
+    <FaultRules>
+        <!-- CORS preflight: RaiseFault already set the response — skip all error overrides -->
+        <FaultRule name="CORSPreflight">
+            <Condition>request.verb == "OPTIONS"</Condition>
+            <!-- No steps — let the RaiseFault response (200 or 403) pass through unchanged -->
+        </FaultRule>
+        <FaultRule name="InvalidJWT">
+            <Step>
+                <Name>AM-InvalidJWTResponse</Name>
+            </Step>
+            <Condition>(fault.name Matches "*JWT*") or (fault.name Matches "*jwt*")</Condition>
+        </FaultRule>
+        <FaultRule name="QuotaViolation">
+            <Step>
+                <Name>AM-QuotaExceededResponse</Name>
+            </Step>
+            <Condition>(fault.name = "QuotaViolation")</Condition>
+        </FaultRule>
+        <FaultRule name="SpikeArrestViolation">
+            <Step>
+                <Name>AM-RateLimitExceededResponse</Name>
+            </Step>
+            <Condition>(fault.name = "SpikeArrestViolation")</Condition>
+        </FaultRule>
+    </FaultRules>
+
+    <DefaultFaultRule name="DefaultFaultRule">
+        <Step>
+            <Name>AM-DefaultErrorResponse</Name>
+            <Condition>request.verb != "OPTIONS" and !(fault.name Matches "*JWT*") and !(fault.name Matches "*jwt*") and !(fault.name = "QuotaViolation") and !(fault.name = "SpikeArrestViolation")</Condition>
+        </Step>
+        <!-- Add CORS headers to ALL error responses so browsers can read them -->
+        <Step>
+            <Name>AM-AddCORSHeaders</Name>
+            <Condition>request.verb != "OPTIONS" and cors.is_valid_origin == "true"</Condition>
+        </Step>
+        <AlwaysEnforce>true</AlwaysEnforce>
+    </DefaultFaultRule>
+
+    <HTTPProxyConnection>
+        <BasePath>/easyweaver/v1</BasePath>
+        <Properties/>
+        <VirtualHost>secure</VirtualHost>
+        <VirtualHost>default</VirtualHost>
+    </HTTPProxyConnection>
+
+    <RouteRule name="noroute">
+        <Condition>request.verb == "OPTIONS"</Condition>
+    </RouteRule>
+    <!-- Infrastructure routes go to target WITHOUT /api/v1 prefix -->
+    <RouteRule name="infrastructure">
+        <Condition>(proxy.pathsuffix MatchesPath "/health") or (proxy.pathsuffix MatchesPath "/health/*") or (proxy.pathsuffix MatchesPath "/info")</Condition>
+        <TargetEndpoint>infrastructure</TargetEndpoint>
+    </RouteRule>
+    <!-- Business API routes go to target WITH /api/v1 prefix -->
+    <RouteRule name="default">
+        <TargetEndpoint>default</TargetEndpoint>
+    </RouteRule>
+</ProxyEndpoint>

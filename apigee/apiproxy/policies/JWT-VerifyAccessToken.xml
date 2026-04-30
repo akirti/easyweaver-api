@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<VerifyJWT async="false" continueOnError="true" enabled="true" name="JWT-VerifyAccessToken">
+    <DisplayName>Verify JWT Access Token</DisplayName>
+    <Properties/>
+    <Algorithm>HS256</Algorithm>
+    <Source>request.header.Authorization</Source>
+    <IgnoreUnresolvedVariables>false</IgnoreUnresolvedVariables>
+    <SecretKey>
+        <Value ref="private.jwt.secret"/>
+    </SecretKey>
+    <Subject>access_token</Subject>
+    <Issuer>easyweaver-auth</Issuer>
+    <Audience>easyweaver-api</Audience>
+    <AdditionalClaims>
+        <Claim name="user_id" ref="jwt.user_id" type="string"/>
+        <Claim name="email" ref="jwt.email" type="string"/>
+        <Claim name="roles" ref="jwt.roles" type="string" array="true"/>
+    </AdditionalClaims>
+    <TimeAllowance>60s</TimeAllowance>
+</VerifyJWT>

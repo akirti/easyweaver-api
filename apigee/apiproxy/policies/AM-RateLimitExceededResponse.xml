@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage async="false" continueOnError="false" enabled="true" name="AM-RateLimitExceededResponse">
+    <DisplayName>Rate Limit Exceeded Response</DisplayName>
+    <Properties/>
+    <Set>
+        <Headers>
+            <Header name="Content-Type">application/json</Header>
+            <Header name="Access-Control-Allow-Origin">{request.header.origin}</Header>
+            <Header name="Access-Control-Allow-Credentials">true</Header>
+            <Header name="Retry-After">1</Header>
+        </Headers>
+        <Payload contentType="application/json">
+{
+    "error": "Too Many Requests",
+    "message": "Rate limit exceeded. Please slow down your requests.",
+    "code": "RATE_LIMIT_EXCEEDED",
+    "status": 429,
+    "timestamp": "{system.timestamp}",
+    "requestId": "{messageid}",
+    "retryAfter": 1
+}
+        </Payload>
+        <StatusCode>429</StatusCode>
+        <ReasonPhrase>Too Many Requests</ReasonPhrase>
+    </Set>
+    <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+    <AssignTo createNew="false" transport="http" type="response"/>
+</AssignMessage>

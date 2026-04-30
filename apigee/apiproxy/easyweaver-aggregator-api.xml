@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<APIProxy revision="1" name="easyweaver-aggregator-api">
+    <DisplayName>EasyWeaver Aggregator API</DisplayName>
+    <Description>API Proxy for EasyWeaver Data Aggregation Platform - Sources, Queries, Processes, and Dashboards</Description>
+    <CreatedAt>1746057600000</CreatedAt>
+    <LastModifiedAt>1746057600000</LastModifiedAt>
+    <Basepaths>/easyweaver/v1</Basepaths>
+    <ConfigurationVersion majorVersion="4" minorVersion="0"/>
+    <Policies/>
+    <ProxyEndpoints>
+        <ProxyEndpoint>default</ProxyEndpoint>
+    </ProxyEndpoints>
+    <Resources/>
+    <TargetServers/>
+    <TargetEndpoints>
+        <TargetEndpoint>default</TargetEndpoint>
+        <TargetEndpoint>infrastructure</TargetEndpoint>
+    </TargetEndpoints>
+</APIProxy>

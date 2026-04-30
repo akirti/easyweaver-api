@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage async="false" continueOnError="false" enabled="true" name="AM-DefaultTargetErrorResponse">
+    <DisplayName>Default Target Error Response</DisplayName>
+    <Properties/>
+    <Set>
+        <Headers>
+            <Header name="Content-Type">application/json</Header>
+            <Header name="Access-Control-Allow-Origin">{request.header.origin}</Header>
+            <Header name="Access-Control-Allow-Credentials">true</Header>
+        </Headers>
+        <Payload contentType="application/json">
+{
+    "error": "Bad Gateway",
+    "message": "Error communicating with the backend service.",
+    "code": "BAD_GATEWAY",
+    "status": 502,
+    "timestamp": "{system.timestamp}",
+    "requestId": "{messageid}",
+    "faultName": "{fault.name}"
+}
+        </Payload>
+        <StatusCode>502</StatusCode>
+        <ReasonPhrase>Bad Gateway</ReasonPhrase>
+    </Set>
+    <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+    <AssignTo createNew="false" transport="http" type="response"/>
+</AssignMessage>

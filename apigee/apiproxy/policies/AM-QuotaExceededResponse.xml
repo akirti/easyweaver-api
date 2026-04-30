@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage async="false" continueOnError="false" enabled="true" name="AM-QuotaExceededResponse">
+    <DisplayName>Quota Exceeded Response</DisplayName>
+    <Properties/>
+    <Set>
+        <Headers>
+            <Header name="Content-Type">application/json</Header>
+            <Header name="Access-Control-Allow-Origin">{request.header.origin}</Header>
+            <Header name="Access-Control-Allow-Credentials">true</Header>
+            <Header name="X-RateLimit-Limit">{ratelimit.Q-EnforceQuota.allowed.count}</Header>
+            <Header name="X-RateLimit-Remaining">0</Header>
+            <Header name="Retry-After">3600</Header>
+        </Headers>
+        <Payload contentType="application/json">
+{
+    "error": "Too Many Requests",
+    "message": "API quota exceeded. Please try again later.",
+    "code": "QUOTA_EXCEEDED",
+    "status": 429,
+    "timestamp": "{system.timestamp}",
+    "requestId": "{messageid}",
+    "retryAfter": 3600
+}
+        </Payload>
+        <StatusCode>429</StatusCode>
+        <ReasonPhrase>Too Many Requests</ReasonPhrase>
+    </Set>
+    <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+    <AssignTo createNew="false" transport="http" type="response"/>
+</AssignMessage>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage async="false" continueOnError="false" enabled="true" name="AM-SetTargetHeaders">
+    <DisplayName>Set Target Headers</DisplayName>
+    <Properties/>
+    <Set>
+        <Headers>
+            <Header name="X-Forwarded-For">{client.ip}</Header>
+            <Header name="X-Forwarded-Proto">{client.scheme}</Header>
+            <Header name="X-Forwarded-Host">{request.header.host}</Header>
+            <Header name="X-Request-Id">{messageid}</Header>
+            <Header name="X-Apigee-Proxy-Name">{apiproxy.name}</Header>
+            <Header name="X-Apigee-Proxy-Revision">{apiproxy.revision}</Header>
+        </Headers>
+    </Set>
+    <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+    <AssignTo createNew="false" transport="http" type="request"/>
+</AssignMessage>

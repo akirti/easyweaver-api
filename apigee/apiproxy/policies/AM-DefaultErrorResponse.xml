@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<AssignMessage async="false" continueOnError="false" enabled="true" name="AM-DefaultErrorResponse">
+    <DisplayName>Default Error Response</DisplayName>
+    <Properties/>
+    <Set>
+        <Headers>
+            <Header name="Content-Type">application/json</Header>
+            <Header name="Access-Control-Allow-Origin">{request.header.origin}</Header>
+            <Header name="Access-Control-Allow-Credentials">true</Header>
+        </Headers>
+        <Payload contentType="application/json">
+{
+    "error": "Internal Server Error",
+    "message": "An unexpected error occurred. Please try again later.",
+    "code": "INTERNAL_ERROR",
+    "status": 500,
+    "timestamp": "{system.timestamp}",
+    "requestId": "{messageid}",
+    "faultName": "{fault.name}"
+}
+        </Payload>
+        <StatusCode>500</StatusCode>
+        <ReasonPhrase>Internal Server Error</ReasonPhrase>
+    </Set>
+    <IgnoreUnresolvedVariables>true</IgnoreUnresolvedVariables>
+    <AssignTo createNew="false" transport="http" type="response"/>
+</AssignMessage>

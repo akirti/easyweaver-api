@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<SpikeArrest async="false" continueOnError="false" enabled="true" name="SA-RateLimit">
+    <DisplayName>Rate Limit - Spike Arrest</DisplayName>
+    <Properties/>
+    <Identifier ref="proxy.client.ip"/>
+    <MessageWeight ref="request.header.x-message-weight"/>
+    <Rate>100ps</Rate>
+    <UseEffectiveCount>true</UseEffectiveCount>
+</SpikeArrest>
