@@ -116,33 +116,44 @@ class TestGetRedis:
 # ---------------------------------------------------------------------------
 
 
+def _make_mock_motor_client():
+    """Build a fully async-safe mock Motor client for init_db tests.
+
+    Every attribute that init_db awaits must be an AsyncMock so it works
+    regardless of pytest-asyncio version or Python runtime.
+    """
+    mock_collection = AsyncMock()
+    mock_collection.create_index = AsyncMock(return_value="idx")
+
+    mock_db = MagicMock()
+    for attr in [
+        "users", "data_sources", "query_runs", "process_configurations",
+        "process_runs", "dashboard_configs", "data_snapshots",
+        "configurations", "batch_size_history",
+    ]:
+        setattr(mock_db, attr, mock_collection)
+
+    mock_admin = MagicMock()
+    mock_admin.command = AsyncMock(return_value={"ok": 1})
+
+    mock_client = MagicMock()
+    mock_client.admin = mock_admin
+    mock_client.easyweaver_meta = mock_db
+
+    return mock_client, mock_collection
+
+
 class TestInitDb:
     def setup_method(self):
         _reset_globals()
 
     @pytest.mark.anyio
     async def test_sets_motor_client_and_meta_db(self):
-        mock_collection = MagicMock()
-        mock_collection.create_index = AsyncMock(return_value="index_name")
-        mock_db = MagicMock()
-        # All collection attribute accesses on the db return mock_collection
-        mock_db.users = mock_collection
-        mock_db.data_sources = mock_collection
-        mock_db.query_runs = mock_collection
-        mock_db.process_configurations = mock_collection
-        mock_db.process_runs = mock_collection
-        mock_db.dashboard_configs = mock_collection
-        mock_db.data_snapshots = mock_collection
-        mock_db.configurations = mock_collection
-        mock_db.batch_size_history = mock_collection
-
-        mock_client = MagicMock()
-        mock_client.admin.command = AsyncMock(return_value={"ok": 1})
-        mock_client.easyweaver_meta = mock_db
+        mock_client, _ = _make_mock_motor_client()
 
         with patch("easyweaver.dependencies.AsyncIOMotorClient", return_value=mock_client):
             with patch("easyweaver.dependencies.settings") as mock_settings:
-                mock_settings.mongo_url = "mongodb://localhost:27017"
+                mock_settings.mongo_url = "mongodb://testhost:27017"
                 mock_settings.db_pool_max_size = 10
                 mock_settings.db_pool_min_size = 1
                 await deps.init_db()
@@ -151,27 +162,16 @@ class TestInitDb:
 
     @pytest.mark.anyio
     async def test_creates_indexes(self):
-        mock_client = MagicMock()
-        mock_client.admin.command = AsyncMock(return_value={"ok": 1})
-        mock_collection = MagicMock()
-        mock_collection.create_index = AsyncMock(return_value="idx")
-        mock_db = MagicMock()
-        for attr in [
-            "users", "data_sources", "query_runs", "process_configurations",
-            "process_runs", "dashboard_configs", "data_snapshots",
-            "configurations", "batch_size_history",
-        ]:
-            setattr(mock_db, attr, mock_collection)
-        mock_client.easyweaver_meta = mock_db
+        mock_client, mock_collection = _make_mock_motor_client()
 
         with patch("easyweaver.dependencies.AsyncIOMotorClient", return_value=mock_client):
             with patch("easyweaver.dependencies.settings") as mock_settings:
-                mock_settings.mongo_url = "mongodb://localhost:27017"
+                mock_settings.mongo_url = "mongodb://testhost:27017"
                 mock_settings.db_pool_max_size = 10
                 mock_settings.db_pool_min_size = 1
                 await deps.init_db()
 
-        # create_index was called at least once
+        # create_index was called for each collection index
         assert mock_collection.create_index.call_count > 0
 
 
